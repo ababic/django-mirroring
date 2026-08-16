@@ -518,14 +518,6 @@ class Command(BaseMirroringCommand):
             state.save(using=alias, update_fields=["restored_at"])
         self.info(f"Recorded restore completion at {state.restored_at.isoformat()}.")
 
-    def print_promote_instructions(self, shadow_url: str) -> None:
-        self.warning(
-            "Heroku cutover: put staging in maintenance mode, scale dynos down, then:\n"
-            "  heroku pg:promote <SHADOW_ADDON_COLOR> -a <staging-app>\n"
-            f"Shadow URL (redacted): {redact_database_url(shadow_url)}\n"
-            "Destroy the previous primary addon after a soak window."
-        )
-
     def run_checked(
         self,
         cmd: list[str],

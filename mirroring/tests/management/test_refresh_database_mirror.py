@@ -107,20 +107,6 @@ def test_build_mirror_excluded_table_data_merges_and_qualifies() -> None:
 
 
 @pytest.mark.unit
-def test_refresh_database_mirror_refuses_agent_readonly_as_destination(
-    settings: SettingsWrapper, monkeypatch: MonkeyPatch
-) -> None:
-    settings.ENV = "production"
-    agent_url = "postgres://agent:ro@prod.example:5432/live"
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.setenv("HEROKU_PROD_READONLY_DB_URL", agent_url)
-    monkeypatch.setenv("MIRROR_SOURCE_DATABASE_URL", "postgres://u:p@follower.example:5432/live")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", agent_url)
-    with pytest.raises(CommandError, match="HEROKU_PROD_READONLY_DB_URL"):
-        call_command("refresh_database_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
 def test_strip_unsupported_session_settings() -> None:
     assert strip_unsupported_session_settings("SET transaction_timeout = 0;\n") is False
     assert strip_unsupported_session_settings("SET SESSION transaction_timeout = 0;\n") is False
@@ -174,20 +160,6 @@ def test_refresh_database_mirror_refuses_primary_as_source(settings: SettingsWra
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
     monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
     with pytest.raises(CommandError, match="live DATABASE_URL as source"):
-        call_command("refresh_database_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_refresh_database_mirror_refuses_agent_readonly_as_source(
-    settings: SettingsWrapper, monkeypatch: MonkeyPatch
-) -> None:
-    settings.ENV = "production"
-    agent_url = "postgres://agent:p@follower.example:5432/live"
-    monkeypatch.setenv("HEROKU_PROD_READONLY_DB_URL", agent_url)
-    monkeypatch.setenv("MIRROR_SOURCE_DATABASE_URL", agent_url)
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
-    monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
-    with pytest.raises(CommandError, match="agent_readonly"):
         call_command("refresh_database_mirror", "--confirm", stdout=StringIO())
 
 

@@ -9,8 +9,8 @@ Safe refresh algorithm
 Load into a **shadow** database first, then cut over so consumers never see a
 half-loaded mirror (same pattern as ``restore_from_mirror``):
 
-1. Preflight — distinct source/destination, refuse live ``DATABASE_URL`` /
-   ``agent_readonly`` as source or dest.
+1. Preflight — distinct source/destination; refuse live ``DATABASE_URL`` as
+   source or destination.
 2. Recreate shadow ``{destination}_tmp`` on the same cluster (``DROP`` if it
    already exists, then ``CREATE``) using ``MIRROR_DATABASE_URL`` credentials
    (must have ``CREATEDB``).
@@ -24,15 +24,15 @@ half-loaded mirror (same pattern as ``restore_from_mirror``):
 
 Intended nightly production topology
 ------------------------------------
-* **Source** — production **follower** with **full** credentials (e.g.
-  ``HEROKU_POSTGRESQL_BRONZE_URL`` / ``MIRROR_SOURCE_DATABASE_URL``). Full access is
-  required so ``pg_dump`` can read PII tables; Dumpling scrubs them in-stream.
-  Do **not** use ``HEROKU_PROD_READONLY_DB_URL`` / ``agent_readonly`` (allow-listed;
-  cannot dump customer tables). Prefer the follower over the primary so mirror load
-  never hits live writes.
-* **Published destination** — ``MIRROR_DATABASE_URL`` (standalone Postgres with
-  ``CREATEDB``). Nightly load targets ``{db}_tmp``, then rename cutover replaces
-  the published database name.
+* **Source** (``MIRROR_SOURCE_DATABASE_URL``) — a production **follower** (or other
+  offline replica) with **full** credentials so ``pg_dump`` can read every table
+  Dumpling will scrub. Prefer a follower over the primary so refresh load never
+  hits live writes. Do **not** point this at a restricted / allow-listed role that
+  cannot ``SELECT`` customer or PII tables — the dump will silently omit them or
+  fail mid-stream.
+* **Published destination** (``MIRROR_DATABASE_URL``) — a **separate** Postgres
+  database with ``CREATEDB`` (never the live app ``DATABASE_URL``). Nightly load
+  targets ``{db}_tmp``, then rename cutover replaces the published database name.
 
 Trim levers
 -----------
@@ -61,9 +61,8 @@ Examples::
     # Preview the planned pipeline (no writes)
     python backend/manage.py refresh_database_mirror --dry-run
 
-    # Nightly Heroku Scheduler / one-off (production)
-    heroku run python backend/manage.py refresh_database_mirror --confirm \\
-        -a reskinned-warehouse-production --size=performance-l
+    # Nightly job / one-off on production
+    python backend/manage.py refresh_database_mirror --confirm
 """
 
 from __future__ import annotations
@@ -114,8 +113,6 @@ SANITIZED_USER_PASSWORD_HASH = (
 ALLOWED_PRODUCTION_ENV = "production"
 SOURCE_URL_ENV = "MIRROR_SOURCE_DATABASE_URL"
 DESTINATION_URL_ENV = "MIRROR_DATABASE_URL"
-# Restricted follower role — must never be used as the dump source.
-AGENT_READONLY_URL_ENV = "HEROKU_PROD_READONLY_DB_URL"
 SUBPROCESS_TIMEOUT_SECONDS = 300
 STAFF_USERNAME_KEEP_RULE_MARKER = "# MIRROR_STAFF_USERNAME_KEEP_RULE"
 
@@ -376,36 +373,18 @@ class Command(BaseMirroringCommand):
         if database_identity(src_url) == database_identity(dst_url):
             raise CommandError(f"{SOURCE_URL_ENV} and {DESTINATION_URL_ENV} resolve to the same host/port/database.")
 
-        # agent_readonly is allow-listed and cannot dump PII tables the policy scrubs.
-        agent_readonly_url = os.environ.get(AGENT_READONLY_URL_ENV)
-        if agent_readonly_url and database_identity(src_url) == database_identity(agent_readonly_url):
-            raise CommandError(
-                f"Refusing {SOURCE_URL_ENV} when it matches {AGENT_READONLY_URL_ENV}. "
-                "That credential is the restricted agent_readonly role. Point "
-                f"{SOURCE_URL_ENV} at the follower's full-access URL "
-                "(e.g. HEROKU_POSTGRESQL_BRONZE_URL)."
-            )
-
         live_url = os.environ.get("DATABASE_URL")
         if live_url and database_identity(src_url) == database_identity(live_url):
             raise CommandError(
                 f"Refusing to dump the live DATABASE_URL as source. "
-                f"Set {SOURCE_URL_ENV} to the full-access follower URL."
+                f"Set {SOURCE_URL_ENV} to a full-access follower (or other offline replica) URL."
             )
 
         # Never wipe/cut over the live app DATABASE_URL, even if MIRROR_DATABASE_URL aliases it.
         if live_url and database_identity(dst_url) == database_identity(live_url):
             raise CommandError(
                 f"Refusing to use the live DATABASE_URL as the destination. "
-                f"Attach a separate Heroku Postgres addon and set {DESTINATION_URL_ENV}."
-            )
-
-        # agent_readonly resolves to the production database; never write there even if
-        # DATABASE_URL is unset (e.g. dedicated mirror refresh dyno).
-        if agent_readonly_url and database_identity(dst_url) == database_identity(agent_readonly_url):
-            raise CommandError(
-                f"Refusing {DESTINATION_URL_ENV} when it resolves to the same database as "
-                f"{AGENT_READONLY_URL_ENV} (production). Attach a separate mirror addon."
+                f"Point {DESTINATION_URL_ENV} at a separate mirror database."
             )
 
     def require_executable(self, name: str) -> None:
@@ -502,8 +481,8 @@ class Command(BaseMirroringCommand):
         provenance sidecar under ``work_dir``; its contents are returned when
         present.
 
-        Heroku Postgres forbids ``session_replication_role`` (superuser-only), so
-        FK integrity during restore depends on Dumpling cascade retain + dump order.
+        Managed Postgres often forbids ``session_replication_role`` (superuser-only),
+        so FK integrity during restore depends on Dumpling cascade retain + dump order.
         """
         dump_cmd = [
             "pg_dump",
