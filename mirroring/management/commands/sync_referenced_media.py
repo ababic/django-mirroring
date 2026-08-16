@@ -122,6 +122,12 @@ class Command(BaseMirroringCommand):
             self.warning("Dry run — no objects will be written.")
 
         self.info("Collecting referenced media keys from the database…")
+        exclude_models = getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None) or []
+        exclude_fields = getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None) or []
+        if exclude_models:
+            self.info(f"Exclude models: {', '.join(exclude_models)}")
+        if exclude_fields:
+            self.info(f"Exclude fields: {', '.join(exclude_fields)}")
         refs = collect_referenced_media_refs()
         self.info(f"Found {len(refs):,} distinct referenced key(s).")
 

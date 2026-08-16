@@ -59,15 +59,38 @@ def storage_is_private(storage: Storage) -> bool:
     return getattr(storage, "default_acl", None) == "private"
 
 
-def iter_filefield_media_refs(*, exclude_models: set[str] | None = None) -> Iterator[MediaObjectRef]:
-    """Yield distinct media refs from every concrete FileField / ImageField."""
-    excluded = exclude_models or set()
+def _normalized_label_set(values: Iterable[str] | None) -> set[str]:
+    return {str(value).strip().lower() for value in (values or []) if str(value).strip()}
+
+
+def iter_filefield_media_refs(
+    *,
+    exclude_models: set[str] | None = None,
+    exclude_fields: set[str] | None = None,
+) -> Iterator[MediaObjectRef]:
+    """Yield distinct media refs from every concrete FileField / ImageField.
+
+    ``exclude_models`` entries are ``app_label.model`` (case-insensitive).
+    ``exclude_fields`` entries are ``app_label.model.field`` (case-insensitive).
+    When omitted, values come from ``MEDIA_SYNC_EXCLUDE_MODELS`` /
+    ``MEDIA_SYNC_EXCLUDE_FIELDS``.
+    """
+    excluded_models = exclude_models if exclude_models is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
+    )
+    excluded_fields = exclude_fields if exclude_fields is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
+    )
     seen: set[str] = set()
     for model in apps.get_models():
         label = model._meta.label_lower
-        if label in excluded:
+        if label in excluded_models:
             continue
-        file_fields = [field for field in model._meta.concrete_fields if isinstance(field, FileField)]
+        file_fields = [
+            field
+            for field in model._meta.concrete_fields
+            if isinstance(field, FileField) and f"{label}.{field.name.lower()}" not in excluded_fields
+        ]
         if not file_fields:
             continue
         field_names = [field.name for field in file_fields]
@@ -125,13 +148,19 @@ def collect_referenced_media_refs(
     include_filefields: bool = True,
     extra_collectors: Iterable[ExtraCollector] | None = None,
     exclude_models: set[str] | None = None,
+    exclude_fields: set[str] | None = None,
 ) -> list[MediaObjectRef]:
     """Return deduped media refs from FileFields and optional host collectors."""
     seen: set[str] = set()
     refs: list[MediaObjectRef] = []
     streams: list[Iterator[MediaObjectRef]] = []
     if include_filefields:
-        streams.append(iter_filefield_media_refs(exclude_models=exclude_models))
+        streams.append(
+            iter_filefield_media_refs(
+                exclude_models=exclude_models,
+                exclude_fields=exclude_fields,
+            )
+        )
     streams.append(iter_extra_media_refs(extra_collectors))
     for stream in streams:
         for ref in stream:

@@ -54,6 +54,20 @@ def test_collect_extra_media_refs_dedupes(settings: SettingsWrapper) -> None:
 
 
 @pytest.mark.unit
+def test_normalized_label_set_and_exclude_settings(settings: SettingsWrapper) -> None:
+    from mirroring.media import _normalized_label_set, iter_filefield_media_refs
+
+    assert _normalized_label_set([" Listing.Shipment ", "", "DATA_REPORTING.ExportedData"]) == {
+        "listing.shipment",
+        "data_reporting.exporteddata",
+    }
+    settings.MEDIA_SYNC_EXCLUDE_MODELS = ["auth.user"]
+    settings.MEDIA_SYNC_EXCLUDE_FIELDS = ["auth.permission.codename"]
+    # Smoke: settings parse and do not raise when scanning installed models.
+    list(iter_filefield_media_refs())
+
+
+@pytest.mark.unit
 def test_sync_media_refs_skip_existing_and_missing() -> None:
     src = MagicMock()
     dst = MagicMock()

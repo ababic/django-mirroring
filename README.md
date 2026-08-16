@@ -104,6 +104,8 @@ optional host collectors, then `CopyObject`s only those keys.
 | `MEDIA_SYNC_SOURCE_REGION` | Optional source region (defaults to `AWS_DEFAULT_REGION`) |
 | `MEDIA_SYNC_ALLOW` | Must be `1` for a live copy (`--dry-run` does not need it) |
 | `MEDIA_SYNC_EXTRA_COLLECTORS` | List of dotted callables yielding extra relative keys (JSON path bags, CharFields, …) |
+| `MEDIA_SYNC_EXCLUDE_MODELS` | Skip whole models: `app_label.model` (e.g. `images.rendition`) |
+| `MEDIA_SYNC_EXCLUDE_FIELDS` | Skip fields: `app_label.model.field` (e.g. `reskinned_inventory.picture.preview`) |
 | `AWS_STORAGE_BUCKET_NAME` | Destination bucket (current env) |
 
 ```bash
@@ -114,6 +116,21 @@ MEDIA_SYNC_ALLOW=1 python manage.py sync_referenced_media --confirm
 Default behaviour skips keys already present on the destination (`--skip-existing`).
 Missing source keys are counted and skipped (common when DB rows outlive deleted
 objects).
+
+### Opting out of fields / models / extras
+
+```python
+# settings.py
+MEDIA_SYNC_EXCLUDE_MODELS = [
+    "listing.shipment",          # shipping labels / courier XML (customer address PII)
+    "data_reporting.exporteddata",
+]
+MEDIA_SYNC_EXCLUDE_FIELDS = [
+    "reskinned_inventory.picture.thumbnail",
+    "reskinned_inventory.picture.preview",
+]
+# Omit a collector from MEDIA_SYNC_EXTRA_COLLECTORS to skip that path bag entirely.
+```
 
 ## Admin
 
