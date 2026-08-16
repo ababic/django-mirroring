@@ -1,3 +1,3 @@
-"""Production database mirror refresh, staging restore, and related Postgres helpers."""
+"""Production database mirror refresh, staging restore, and selective media sync."""
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

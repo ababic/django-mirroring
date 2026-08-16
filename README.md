@@ -89,6 +89,31 @@ URL env vars.
 | `refresh_database_mirror` | Nightly production job: dump follower → Dumpling → shadow DB → rename cutover |
 | `restore_from_mirror` | Replace staging from the mirror via shadow load + rename cutover |
 | `revert_mirror_restore` | Swap `{target}_preswap` back after a restore |
+| `sync_referenced_media` | After restore: copy DB-referenced S3 keys from a source bucket into `AWS_STORAGE_BUCKET_NAME` |
+
+## Selective media sync (separate buckets)
+
+When staging must **not** share the production media bucket, run
+`sync_referenced_media` after `restore_from_mirror`. It collects keys from every
+`FileField` / `ImageField` (honouring private storage `location` prefixes) plus
+optional host collectors, then `CopyObject`s only those keys.
+
+| Setting / env | Purpose |
+|---------------|---------|
+| `MEDIA_SYNC_SOURCE_BUCKET` | Production (or mirror-source) media bucket to read from |
+| `MEDIA_SYNC_SOURCE_REGION` | Optional source region (defaults to `AWS_DEFAULT_REGION`) |
+| `MEDIA_SYNC_ALLOW` | Must be `1` for a live copy (`--dry-run` does not need it) |
+| `MEDIA_SYNC_EXTRA_COLLECTORS` | List of dotted callables yielding extra relative keys (JSON path bags, CharFields, …) |
+| `AWS_STORAGE_BUCKET_NAME` | Destination bucket (current env) |
+
+```bash
+python manage.py sync_referenced_media --dry-run
+MEDIA_SYNC_ALLOW=1 python manage.py sync_referenced_media --confirm
+```
+
+Default behaviour skips keys already present on the destination (`--skip-existing`).
+Missing source keys are counted and skipped (common when DB rows outlive deleted
+objects).
 
 ## Admin
 
