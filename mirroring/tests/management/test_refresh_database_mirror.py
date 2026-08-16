@@ -140,30 +140,6 @@ def test_refresh_database_mirror_refuses_same_src_and_dst(settings: SettingsWrap
 
 
 @pytest.mark.unit
-def test_refresh_database_mirror_refuses_live_database_url_as_destination(
-    settings: SettingsWrapper, monkeypatch: MonkeyPatch
-) -> None:
-    settings.ENV = "production"
-    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@db.example:5432/live")
-    monkeypatch.setenv("MIRROR_SOURCE_DATABASE_URL", "postgres://u:p@follower.example:5432/live")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@db.example:5432/live")
-    monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
-    with pytest.raises(CommandError, match="live DATABASE_URL"):
-        call_command("refresh_database_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_refresh_database_mirror_refuses_primary_as_source(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.ENV = "production"
-    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@primary.example:5432/live")
-    monkeypatch.setenv("MIRROR_SOURCE_DATABASE_URL", "postgres://u:p@primary.example:5432/live")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
-    monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
-    with pytest.raises(CommandError, match="live DATABASE_URL as source"):
-        call_command("refresh_database_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
 def test_refresh_database_mirror_dry_run_lints_policy(
     settings: SettingsWrapper, monkeypatch: MonkeyPatch, tmp_path: Path
 ) -> None:

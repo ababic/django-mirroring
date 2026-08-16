@@ -9,8 +9,7 @@ Safe refresh algorithm
 Load into a **shadow** database first, then cut over so consumers never see a
 half-loaded mirror (same pattern as ``restore_from_mirror``):
 
-1. Preflight — distinct source/destination; refuse live ``DATABASE_URL`` as
-   source or destination.
+1. Preflight — distinct source and destination URLs.
 2. Recreate shadow ``{destination}_tmp`` on the same cluster (``DROP`` if it
    already exists, then ``CREATE``) using ``MIRROR_DATABASE_URL`` credentials
    (must have ``CREATEDB``).
@@ -22,17 +21,18 @@ half-loaded mirror (same pattern as ``restore_from_mirror``):
 6. Cutover by rename — terminate connections, rename live mirror → ``*_old_<ts>``,
    shadow → published name (``MIRROR_DATABASE_URL`` keeps working).
 
-Intended nightly production topology
-------------------------------------
-* **Source** (``MIRROR_SOURCE_DATABASE_URL``) — a production **follower** (or other
-  offline replica) with **full** credentials so ``pg_dump`` can read every table
-  Dumpling will scrub. Prefer a follower over the primary so refresh load never
-  hits live writes. Do **not** point this at a restricted / allow-listed role that
-  cannot ``SELECT`` customer or PII tables — the dump will silently omit them or
-  fail mid-stream.
-* **Published destination** (``MIRROR_DATABASE_URL``) — a **separate** Postgres
-  database with ``CREATEDB`` (never the live app ``DATABASE_URL``). Nightly load
-  targets ``{db}_tmp``, then rename cutover replaces the published database name.
+Recommended production topology
+-------------------------------
+* **Source** (``MIRROR_SOURCE_DATABASE_URL``) — prefer a production **follower**
+  (or other offline replica) with **full** credentials so ``pg_dump`` can read
+  every table Dumpling will scrub, and so refresh load does not compete with live
+  writes. Dumping the primary works, but a follower is better practice. Do **not**
+  point this at a restricted / allow-listed role that cannot ``SELECT`` customer
+  or PII tables — the dump will silently omit them or fail mid-stream.
+* **Published destination** (``MIRROR_DATABASE_URL``) — a Postgres database with
+  ``CREATEDB``. Prefer a **separate** mirror database from the live app primary.
+  Nightly load targets ``{db}_tmp``, then rename cutover replaces the published
+  database name.
 
 Trim levers
 -----------
@@ -372,20 +372,6 @@ class Command(BaseMirroringCommand):
     def assert_safe_endpoints(self, src_url: str, dst_url: str) -> None:
         if database_identity(src_url) == database_identity(dst_url):
             raise CommandError(f"{SOURCE_URL_ENV} and {DESTINATION_URL_ENV} resolve to the same host/port/database.")
-
-        live_url = os.environ.get("DATABASE_URL")
-        if live_url and database_identity(src_url) == database_identity(live_url):
-            raise CommandError(
-                f"Refusing to dump the live DATABASE_URL as source. "
-                f"Set {SOURCE_URL_ENV} to a full-access follower (or other offline replica) URL."
-            )
-
-        # Never wipe/cut over the live app DATABASE_URL, even if MIRROR_DATABASE_URL aliases it.
-        if live_url and database_identity(dst_url) == database_identity(live_url):
-            raise CommandError(
-                f"Refusing to use the live DATABASE_URL as the destination. "
-                f"Point {DESTINATION_URL_ENV} at a separate mirror database."
-            )
 
     def require_executable(self, name: str) -> None:
         if shutil.which(name) is None:

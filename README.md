@@ -38,7 +38,7 @@ wire env → settings in one place).
 
 | Setting / env | Purpose |
 |---------------|---------|
-| `MIRROR_SOURCE_DATABASE_URL` | Full-access follower (or offline replica) used as `pg_dump` source |
+| `MIRROR_SOURCE_DATABASE_URL` | `pg_dump` source (prefer a full-access follower/replica) |
 | `MIRROR_DATABASE_URL` | Published mirror database (destination for refresh; source for restore) |
 | `MIRROR_DUMPLING_CONFIG` | Path to project Dumpling TOML (required for refresh) |
 | `MIRROR_EXCLUDED_SCHEMA` | Schemas omitted from dump (default: `heroku_ext`, `_heroku`) |
@@ -58,18 +58,20 @@ wire env → settings in one place).
 
 `DUMPLING_GLOBAL_SALT` must be set in the environment for Dumpling lint/run.
 
-## Endpoint safety (operators)
+## Endpoint guidance (operators)
 
-Refresh refuses to use the live app `DATABASE_URL` as source or destination. Beyond
-that gate, **credential choice is an operator responsibility**:
+Refresh only refuses when source and destination resolve to the **same**
+host/port/database. Credential choice is otherwise an operator responsibility:
 
-- Point `MIRROR_SOURCE_DATABASE_URL` at a **full-access** follower/replica so
-  `pg_dump` can read every table Dumpling anonymises. A restricted / allow-listed
-  role that cannot `SELECT` PII tables will produce an incomplete or failing dump.
-- Point `MIRROR_DATABASE_URL` at a **separate** mirror database (never the live
-  primary). The destination role needs `CREATEDB` for shadow load + rename cutover.
-- Prefer a follower over the primary for source so refresh load does not compete
-  with live writes.
+- Prefer pointing `MIRROR_SOURCE_DATABASE_URL` at a **full-access** follower or
+  offline replica so `pg_dump` can read every table Dumpling anonymises, and so
+  refresh load does not compete with live writes. Dumping the primary is allowed
+  but not recommended under load.
+- Prefer pointing `MIRROR_DATABASE_URL` at a **separate** mirror database from the
+  live app primary. The destination role needs `CREATEDB` for shadow load + rename
+  cutover.
+- A restricted / allow-listed role that cannot `SELECT` PII tables will produce an
+  incomplete or failing dump — use full-access credentials for the source.
 
 ## Management commands
 
