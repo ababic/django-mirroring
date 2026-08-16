@@ -6,7 +6,8 @@ Anonymisation already happened when the mirror was refreshed.
 
 Safe replace algorithm
 ----------------------
-1. Preflight — ``MIRROR_RESTORE_ALLOW``, distinct source/target, refuse production primary.
+1. Preflight — ``MIRROR_RESTORE_ALLOW``, distinct source/target, allow/block host
+   suffixes.
 2. Snapshot staging staff credentials (allowlisted email domains on the live
    target) and rematerialise onto the shadow by ``USERNAME_FIELD`` (username is
    kept on the database mirror; email/password are scrubbed there).
@@ -313,14 +314,9 @@ class Command(BaseMirroringCommand):
         if allowed_hosts and not any(host_matches_suffix(target_host, s) for s in allowed_hosts):
             raise CommandError(f"Target host {target_host!r} is not in MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 
-        # Never treat a configured production primary as the replace target.
-        production_url = os.environ.get("PRODUCTION_DATABASE_URL", "").strip()
-        if production_url and database_identity(target_url) == database_identity(production_url):
-            raise CommandError(f"Refusing to use PRODUCTION_DATABASE_URL as {TARGET_URL_ENV}.")
-
         blocked = list(getattr(settings, "MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES", []))
         if any(host_matches_suffix(target_host, s) for s in blocked):
-            raise CommandError(f"Target host {target_host!r} matches a blocked production host suffix.")
+            raise CommandError(f"Target host {target_host!r} matches a blocked host suffix.")
         if require_allowed_host and not allowed_hosts:
             raise CommandError("Refusing a destructive restore without MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 

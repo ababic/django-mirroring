@@ -37,8 +37,7 @@ Recommended production topology
 Trim levers
 -----------
 1. ``--exclude-table-data`` / settings ``MIRROR_EXCLUDED_TABLE_DATA`` —
-   omit bulky/ephemeral tables entirely (extends ``ANALYTICS_EXCLUDED_TABLE_DATA``
-   from ``clone_analytics_db``, plus sessions, logs, tokens, …).
+   omit bulky/ephemeral tables entirely (sessions, logs, tokens, …).
 2. Dumpling ``row_filters`` generated for ``MIRROR_ROW_RETAIN`` — keep rows
    with timestamp ``gte`` cutoff (``format = "datetime"``) or ``is_null``, plus
    optional parent→child ``cascade`` retain for related tables.
@@ -469,6 +468,7 @@ class Command(BaseMirroringCommand):
 
         Managed Postgres often forbids ``session_replication_role`` (superuser-only),
         so FK integrity during restore depends on Dumpling cascade retain + dump order.
+        Put ``sslmode`` on the connection URLs when the server requires TLS.
         """
         dump_cmd = [
             "pg_dump",

@@ -8,7 +8,7 @@ from pathlib import Path
 from django.conf import settings
 from django.contrib.auth import get_user_model
 
-MIRROR_EXCLUDED_SCHEMA = ["heroku_ext", "_heroku"]
+MIRROR_EXCLUDED_SCHEMA: list[str] = []
 MIRROR_EXCLUDED_TABLES: list[str] = []
 
 # Projects override in settings; each entry is {"table", "column", "cascades"?}.

@@ -53,14 +53,12 @@ def maintenance_database_url(url: str, *, maintenance_db: str = "postgres") -> s
     return replace_database_name(url, maintenance_db)
 
 
-def looks_like_managed_heroku_postgres(url: str) -> bool:
-    """True when the host looks like Heroku's managed Postgres."""
-    host = (urlparse(url).hostname or "").lower()
-    return "amazonaws.com" in host or "heroku" in host
-
-
 def libpq_environ(url: str, *, base_env: dict[str, str] | None = None) -> dict[str, str]:
-    """Build a subprocess env with libpq connection vars so passwords stay out of argv."""
+    """Build a subprocess env with libpq connection vars so passwords stay out of argv.
+
+    Honours ``sslmode`` from the URL query string when present; does not infer SSL
+    from the hostname.
+    """
     parsed = urlparse(url)
     env = dict(base_env if base_env is not None else os.environ)
     env["PGHOST"] = parsed.hostname or ""
@@ -72,8 +70,6 @@ def libpq_environ(url: str, *, base_env: dict[str, str] | None = None) -> dict[s
     query = {key.lower(): values[0] for key, values in parse_qs(parsed.query).items() if values}
     if "sslmode" in query:
         env["PGSSLMODE"] = query["sslmode"]
-    elif "heroku" in (parsed.hostname or "").lower() or "amazonaws.com" in (parsed.hostname or "").lower():
-        env.setdefault("PGSSLMODE", "require")
     return env
 
 

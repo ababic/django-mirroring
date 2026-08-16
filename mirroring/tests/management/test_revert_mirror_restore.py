@@ -43,20 +43,11 @@ def test_revert_requires_allow(monkeypatch: MonkeyPatch) -> None:
 
 
 @pytest.mark.unit
-def test_revert_refuses_production_database_url(monkeypatch: MonkeyPatch) -> None:
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@prod.example:5432/live")
-    monkeypatch.setenv("PRODUCTION_DATABASE_URL", "postgres://u:p@prod.example:5432/live")
-    with pytest.raises(CommandError, match="PRODUCTION_DATABASE_URL"):
-        call_command("revert_mirror_restore", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
 def test_revert_refuses_blocked_target_host(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
     settings.MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES = ["prod.example"]
     monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@db.prod.example:5432/staging")
-    with pytest.raises(CommandError, match="blocked production host"):
+    with pytest.raises(CommandError, match="blocked host suffix"):
         call_command("revert_mirror_restore", "--confirm", stdout=StringIO())
 
 

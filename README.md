@@ -41,7 +41,7 @@ wire env → settings in one place).
 | `MIRROR_SOURCE_DATABASE_URL` | `pg_dump` source (prefer a full-access follower/replica) |
 | `MIRROR_DATABASE_URL` | Published mirror database (destination for refresh; source for restore) |
 | `MIRROR_DUMPLING_CONFIG` | Path to project Dumpling TOML (required for refresh) |
-| `MIRROR_EXCLUDED_SCHEMA` | Schemas omitted from dump (default: `heroku_ext`, `_heroku`) |
+| `MIRROR_EXCLUDED_SCHEMA` | Schemas omitted from dump (default: none — set in host settings) |
 | `MIRROR_EXCLUDED_TABLES` | Tables omitted entirely |
 | `MIRROR_EXCLUDED_TABLE_DATA` | Tables whose data is omitted (schema kept) — build with `build_mirror_excluded_table_data()` |
 | `MIRROR_ROW_RETAIN` | Per-table datetime retain specs for Dumpling `row_filters` |
@@ -72,6 +72,15 @@ host/port/database. Credential choice is otherwise an operator responsibility:
   cutover.
 - A restricted / allow-listed role that cannot `SELECT` PII tables will produce an
   incomplete or failing dump — use full-access credentials for the source.
+- Put `sslmode` on connection URLs when the server requires TLS (no hostname-based
+  SSL inference).
+- Omit provider schemas (e.g. Heroku's `heroku_ext` / `_heroku`) via
+  `MIRROR_EXCLUDED_SCHEMA` in the host project when needed.
+
+Restore/revert use configurable host allow/block lists
+(`MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES` /
+`MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES`) rather than hardcoded production
+URL env vars.
 
 ## Management commands
 

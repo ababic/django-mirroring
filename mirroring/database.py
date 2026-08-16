@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse
 
 from django.apps import apps
 from django.core.management import call_command
@@ -23,6 +22,9 @@ def temporary_database_alias(database_url: str, *, alias: str) -> Iterator[str]:
 
     Refuses to overwrite an existing alias. Always closes and removes the alias
     afterwards so settings ``DATABASES`` are left unchanged.
+
+    SSL is controlled by the URL (e.g. ``?sslmode=require``); this helper does
+    not infer SSL from the hostname.
     """
     apps.check_apps_ready()
     if alias in connections.databases:
@@ -30,7 +32,6 @@ def temporary_database_alias(database_url: str, *, alias: str) -> Iterator[str]:
     connections.databases[alias] = dj_database_url.parse(
         database_url,
         conn_max_age=0,
-        ssl_require="amazonaws.com" in (urlparse(database_url).hostname or "").lower(),
     )
     try:
         yield alias

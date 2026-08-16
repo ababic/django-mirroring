@@ -54,9 +54,9 @@ def test_libpq_environ_puts_credentials_in_env_not_url() -> None:
 
 
 @pytest.mark.unit
-def test_libpq_environ_defaults_sslmode_for_heroku_hosts() -> None:
-    env = libpq_environ("postgres://u:p@ec2-1-2-3-4.compute-1.amazonaws.com:5432/d", base_env={})
-    assert env["PGSSLMODE"] == "require"
+def test_libpq_environ_omits_sslmode_when_not_in_url() -> None:
+    env = libpq_environ("postgres://u:p@db.example:5432/d", base_env={})
+    assert "PGSSLMODE" not in env
 
 
 @pytest.mark.unit

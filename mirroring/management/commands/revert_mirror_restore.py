@@ -3,7 +3,7 @@
 After a successful restore cutover the previous live database remains as
 ``{target}_preswap``. This command swaps it back:
 
-1. Preflight — ``MIRROR_RESTORE_ALLOW``, refuse production / blocked hosts.
+1. Preflight — ``MIRROR_RESTORE_ALLOW``, allow/block host suffixes.
 2. Require ``{target}_preswap`` to exist (otherwise nothing to revert).
 3. Park live ``{target}`` → ``{target}_backout`` (frees the live name).
 4. Rename ``{target}_preswap`` → ``{target}``.
@@ -144,13 +144,9 @@ class Command(BaseMirroringCommand):
         if allowed_hosts and not any(host_matches_suffix(target_host, s) for s in allowed_hosts):
             raise CommandError(f"Target host {target_host!r} is not in MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 
-        production_url = os.environ.get("PRODUCTION_DATABASE_URL", "").strip()
-        if production_url and database_identity(target_url) == database_identity(production_url):
-            raise CommandError(f"Refusing to use PRODUCTION_DATABASE_URL as {TARGET_URL_ENV}.")
-
         blocked = list(getattr(settings, "MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES", []))
         if any(host_matches_suffix(target_host, s) for s in blocked):
-            raise CommandError(f"Target host {target_host!r} matches a blocked production host suffix.")
+            raise CommandError(f"Target host {target_host!r} matches a blocked host suffix.")
         if require_allowed_host and not allowed_hosts:
             raise CommandError("Refusing a destructive revert without MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 
