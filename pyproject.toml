@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=70.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "django-mirroring"
+version = "0.1.0"
+authors = [{name = "Andy Babic", email = "andy@wearecrew.com"}]
+readme = "README.md"
+license = {file = "LICENSE"}
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Framework :: Django",
+    "Framework :: Django :: 4.2",
+    "Framework :: Django :: 5.0",
+    "Framework :: Django :: 5.1",
+    "Framework :: Django :: 5.2",
+    "Framework :: Django :: 6.0",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "Django>=4.2",
+    "dj-database-url>=2.0",
+    "python-dateutil>=2.8",
+]
+description = "Django add-on for production database mirror refresh and staging restore (Dumpling + Postgres shadow cutover)"
+
+[project.urls]
+Home = "https://github.com/ababic/django-mirroring"
+
+[tool.setuptools.packages.find]
+include = ["mirroring*"]
+
+[tool.setuptools.package-data]
+mirroring = ["py.typed"]
