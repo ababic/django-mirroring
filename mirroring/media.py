@@ -103,20 +103,20 @@ def load_extra_collectors(dotted_paths: Iterable[str] | None = None) -> list[Ext
 
 
 def iter_extra_media_refs(collectors: Iterable[ExtraCollector] | None = None) -> Iterator[MediaObjectRef]:
-    """Yield keys from host-project collectors (plain relative keys on default storage)."""
-    from django.core.files.storage import default_storage
+    """Yield keys from host-project collectors.
 
+    Collectors return **bucket object keys** (already including any storage
+    ``location`` prefix). They are not re-normalized through ``default_storage``,
+    so FileSystemStorage test backends cannot rewrite them into local paths.
+    """
     seen: set[str] = set()
-    private = storage_is_private(default_storage)
     for collector in collectors if collectors is not None else load_extra_collectors():
         for raw in collector():
-            name = (raw or "").strip()
-            if not name:
-                continue
-            key = storage_object_key(default_storage, name)
+            key = (raw or "").strip().lstrip("/")
             if not key or key in seen:
                 continue
             seen.add(key)
+            private = key.startswith(("labels/", "catalogue_imports/"))
             yield MediaObjectRef(key=key, private=private)
 
 
