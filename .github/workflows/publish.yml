@@ -27,8 +27,8 @@ jobs:
         with:
           enable-cache: false
       - run: uv build
-      - run: uv run --isolated --no-project --with dist/*.whl pytest
-      - run: uv run --isolated --no-project --with dist/*.tar.gz pytest
+      - run: uv run --isolated --no-project --with dist/*.whl --with pytest --with pytest-django --with pytest-cov pytest
+      - run: uv run --isolated --no-project --with dist/*.tar.gz --with pytest --with pytest-django --with pytest-cov pytest
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           path: ./dist
