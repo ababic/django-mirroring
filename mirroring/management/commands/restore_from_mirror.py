@@ -76,6 +76,7 @@ from mirroring.management.postgres_clone import (
     shadow_database_name,
 )
 from mirroring.models import MirrorDatabaseState
+from mirroring.versions import require_postgres_clients
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser
@@ -168,8 +169,7 @@ class Command(BaseMirroringCommand):
         staff_domains = list(getattr(settings, "MIRROR_RESTORE_STAFF_EMAIL_DOMAINS", []))
         user_table = user_model._meta.db_table
 
-        self.require_executable("pg_dump")
-        self.require_executable("psql")
+        require_postgres_clients("pg_dump", "psql")
 
         self.render_h1("Refresh staging from database mirror" + (" (dry run)" if dry_run else ""))
         self.info(f"Source ({SOURCE_URL_ENV}): {redact_database_url(source_url)}")
@@ -294,10 +294,6 @@ class Command(BaseMirroringCommand):
         if urlparse(value).scheme not in {"postgres", "postgresql"}:
             raise CommandError(f"{env_var} must be a postgres:// or postgresql:// URL.")
         return value
-
-    def require_executable(self, name: str) -> None:
-        if shutil.which(name) is None:
-            raise CommandError(f"Required executable not found on PATH: {name}")
 
     def assert_safe_endpoints(
         self,

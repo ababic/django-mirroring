@@ -69,7 +69,7 @@ def test_revert_dry_run(monkeypatch: MonkeyPatch) -> None:
         return dbname in {"staging", "staging_preswap"}
 
     with (
-        patch("mirroring.management.commands.revert_mirror_restore.shutil.which", return_value="/bin/true"),
+        patch("mirroring.management.commands.revert_mirror_restore.require_postgres_clients"),
         patch(
             "mirroring.management.commands.revert_mirror_restore.postgres_database_exists",
             side_effect=fake_exists,

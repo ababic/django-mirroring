@@ -23,7 +23,6 @@ Examples::
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -42,6 +41,7 @@ from mirroring.management.postgres_clone import (
     redact_database_url,
     revert_preswap_cutover,
 )
+from mirroring.versions import require_postgres_clients
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser
@@ -84,7 +84,7 @@ class Command(BaseMirroringCommand):
         except ValueError as exc:
             raise CommandError(str(exc)) from exc
 
-        self.require_executable("psql")
+        require_postgres_clients("psql")
 
         self.render_h1("Revert staging mirror restore" + (" (dry run)" if dry_run else ""))
         self.info(f"Target ({TARGET_URL_ENV}): {redact_database_url(target_url)}")
@@ -133,10 +133,6 @@ class Command(BaseMirroringCommand):
         if urlparse(value).scheme not in {"postgres", "postgresql"}:
             raise CommandError(f"{env_var} must be a postgres:// or postgresql:// URL.")
         return value
-
-    def require_executable(self, name: str) -> None:
-        if shutil.which(name) is None:
-            raise CommandError(f"Required executable not found on PATH: {name}")
 
     def assert_safe_target(self, target_url: str, *, require_allowed_host: bool) -> None:
         allowed_hosts = list(getattr(settings, "MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES", []))

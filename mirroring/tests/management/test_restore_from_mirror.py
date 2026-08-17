@@ -82,10 +82,7 @@ def test_refresh_refuses_partial_suffix_false_positive(settings: SettingsWrapper
         "MIRROR_RESTORE_TARGET_DATABASE_URL",
         "postgres://u:p@notstaging.example.com:5432/staging",
     )
-    with patch(
-        "mirroring.management.commands.restore_from_mirror.shutil.which",
-        return_value="/bin/true",
-    ):
+    with patch("mirroring.management.commands.restore_from_mirror.require_postgres_clients"):
         out = StringIO()
         call_command("restore_from_mirror", "--dry-run", stdout=out)
     assert "Dry run complete" in out.getvalue()
@@ -106,10 +103,7 @@ def test_refresh_dry_run(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")
-    with patch(
-        "mirroring.management.commands.restore_from_mirror.shutil.which",
-        return_value="/bin/true",
-    ):
+    with patch("mirroring.management.commands.restore_from_mirror.require_postgres_clients"):
         out = StringIO()
         call_command("restore_from_mirror", "--dry-run", stdout=out)
     output = out.getvalue()
@@ -124,10 +118,7 @@ def test_refresh_dry_run_delete_preswap(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")
-    with patch(
-        "mirroring.management.commands.restore_from_mirror.shutil.which",
-        return_value="/bin/true",
-    ):
+    with patch("mirroring.management.commands.restore_from_mirror.require_postgres_clients"):
         out = StringIO()
         call_command("restore_from_mirror", "--dry-run", "--delete-preswap", stdout=out)
     assert "will DROP before cutover (--delete-preswap)" in out.getvalue()
@@ -300,7 +291,7 @@ def test_restore_soft_fails_watermark_after_cutover(
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")
 
     with (
-        patch("mirroring.management.commands.restore_from_mirror.shutil.which", return_value="/bin/true"),
+        patch("mirroring.management.commands.restore_from_mirror.require_postgres_clients"),
         patch.object(Command, "snapshot_staff_credentials", return_value=[]),
         patch(
             "mirroring.management.commands.restore_from_mirror.recreate_shadow_database",

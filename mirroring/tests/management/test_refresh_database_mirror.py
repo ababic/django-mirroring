@@ -155,7 +155,8 @@ def test_refresh_database_mirror_dry_run_lints_policy(
     monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
 
     with (
-        patch("mirroring.management.commands.refresh_database_mirror.shutil.which", return_value="/bin/true"),
+        patch("mirroring.management.commands.refresh_database_mirror.require_dumpling", return_value="dumpling"),
+        patch("mirroring.management.commands.refresh_database_mirror.require_postgres_clients"),
         patch("mirroring.management.commands.refresh_database_mirror.subprocess.run") as run_mock,
     ):
         run_mock.return_value = MagicMock(returncode=0, stderr="", stdout="")
@@ -178,7 +179,8 @@ def test_refresh_database_mirror_drops_retired_database(settings: SettingsWrappe
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@dst.example:5432/dst")
     monkeypatch.setenv("DUMPLING_GLOBAL_SALT", "unit-test-salt")
     with (
-        patch("mirroring.management.commands.refresh_database_mirror.shutil.which", return_value="/bin/true"),
+        patch("mirroring.management.commands.refresh_database_mirror.require_dumpling", return_value="dumpling"),
+        patch("mirroring.management.commands.refresh_database_mirror.require_postgres_clients"),
         patch(
             "mirroring.management.commands.refresh_database_mirror.recreate_shadow_database",
             return_value="postgres://u:p@dst.example:5432/dst_tmp",

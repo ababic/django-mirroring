@@ -24,6 +24,35 @@ Add `"mirroring"` to `INSTALLED_APPS` and run migrations:
 python manage.py migrate mirroring
 ```
 
+## Pinned dependencies
+
+Every dependency is pinned to a compatible release (`~=`) so a mirror run cannot
+silently pick up an incompatible Dumpling policy format or AWS SDK behaviour.
+
+| Dependency | Pin | Used by |
+|------------|-----|---------|
+| Python | `>=3.12` | all |
+| `Django` | `~=6.0.0` | all |
+| `dj-database-url` | `~=2.2.0` | temporary database aliases |
+| `python-dateutil` | `~=2.9.0` | retain-window cutoffs |
+| `dumpling-cli` | `~=0.9.0` | `refresh_database_mirror` anonymisation |
+| `boto3` | `~=1.42.0` | `sync_referenced_media` |
+
+`dumpling-cli` ships the `dumpling` executable, so installing this package also
+pins the CLI. The commands verify it at start-up and refuse to run against a
+different minor series.
+
+**Postgres client tools** (`pg_dump`, `psql`) are system packages, not pip
+dependencies, so they are pinned as a **minimum major** — `pg_dump` refuses to
+dump a server newer than itself, while newer clients read older servers fine:
+
+| Setting / env | Default | Purpose |
+|---------------|---------|---------|
+| `MIRRORING_POSTGRES_CLIENT_MAJOR` | `15` | Minimum `pg_dump` / `psql` major; set to the highest server major you mirror from |
+
+Commands fail fast with a clear error when a tool is missing or too old, rather
+than part-way through a dump.
+
 ## Dumpling policy (project-owned)
 
 Anonymisation rules live in a **project-owned** Dumpling TOML file, not inside this
@@ -55,6 +84,7 @@ wire env → settings in one place).
 | `MIRROR_AUTH_USER_DB_TABLE` | Optional qualified user table (default: `get_user_model()._meta.db_table`) |
 | `MIRRORING_AUTO_REGISTER_ADMIN` | Register admin model (default: `True`) |
 | `MIRRORING_ADMIN_SITE` | Optional dotted path to a custom `AdminSite` (e.g. `"core.admin.site"`) |
+| `MIRRORING_POSTGRES_CLIENT_MAJOR` | Minimum `pg_dump` / `psql` major (default: `15`) |
 
 `DUMPLING_GLOBAL_SALT` must be set in the environment for Dumpling lint/run.
 

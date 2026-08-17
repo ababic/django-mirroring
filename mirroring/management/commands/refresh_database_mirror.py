@@ -97,6 +97,8 @@ from mirroring.management.postgres_clone import (
     shadow_database_name,
 )
 from mirroring.models import MirrorDatabaseState
+from mirroring.versions import require_dumpling, require_postgres_clients
+from mirroring.versions import require_dumpling, require_postgres_clients
 
 if TYPE_CHECKING:
     from argparse import ArgumentParser
@@ -259,10 +261,8 @@ class Command(BaseMirroringCommand):
         if not config_path.is_file():
             raise CommandError(f"Dumpling config not found: {config_path}")
 
-        dumpling_bin = options["dumpling_bin"] or os.environ.get("DUMPLING_BIN") or "dumpling"
-        self.require_executable(dumpling_bin)
-        self.require_executable("pg_dump")
-        self.require_executable("psql")
+        dumpling_bin = require_dumpling(options["dumpling_bin"] or None)
+        require_postgres_clients("pg_dump", "psql")
 
         if not os.environ.get("DUMPLING_GLOBAL_SALT"):
             raise CommandError("DUMPLING_GLOBAL_SALT is not set (required by dumplingconf.toml).")
@@ -371,10 +371,6 @@ class Command(BaseMirroringCommand):
     def assert_safe_endpoints(self, src_url: str, dst_url: str) -> None:
         if database_identity(src_url) == database_identity(dst_url):
             raise CommandError(f"{SOURCE_URL_ENV} and {DESTINATION_URL_ENV} resolve to the same host/port/database.")
-
-    def require_executable(self, name: str) -> None:
-        if shutil.which(name) is None:
-            raise CommandError(f"Required executable not found on PATH: {name}")
 
     def redact_url(self, url: str) -> str:
         return redact_database_url(url)
