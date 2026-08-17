@@ -47,8 +47,15 @@ On every push and pull request, GitHub Actions:
 - Runs lowest- and highest-dependency isolated jobs
 - Runs a Python 3.12–3.14 compatibility matrix
 
-Creating a GitHub release publishes to PyPI via trusted publishing (requires the
-`pypi` environment to be configured on the repository).
+Creating a GitHub release publishes to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).
+Before the first release, add a **pending publisher** on PyPI:
+
+| Field | Value |
+|-------|-------|
+| Owner | `ababic` |
+| Repository | `django-mirroring` |
+| Workflow | `publish.yml` |
+| Environment | *(leave blank unless you also create a matching GitHub Actions environment)* |
 
 ## Code review
 
@@ -62,4 +69,5 @@ On `main`:
 1. Update the version in `pyproject.toml` and `src/mirroring/__init__.py`.
 2. Update [CHANGELOG.md](CHANGELOG.md).
 3. Commit, tag, and push (`git tag -a v0.2.0 -m "Release v0.2.0" && git push --tags`).
-4. Create a GitHub release from the tag so the publish workflow can run.
+4. Create a GitHub release from the tag so the publish workflow can run
+   (PyPI Trusted Publisher must already be configured — see above).
