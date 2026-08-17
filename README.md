@@ -87,7 +87,6 @@ wire env → settings in one place).
 | `MIRROR_RESTORE_TARGET_DATABASE_URL` | Staging DB replaced by `restore_from_mirror` |
 | `MIRROR_RESTORE_ALLOW` | Must be `1` to run restore/revert |
 | `MIRROR_RESTORE_STAFF_EMAIL_DOMAINS` | Comma-separated staff email domains (username keep + restore rematerialisation) |
-| `MIRROR_AUTH_USER_DB_TABLE` | Optional qualified user table (default: `get_user_model()._meta.db_table`) |
 | `MIRRORING_AUTO_REGISTER_ADMIN` | Register admin model (default: `True`) |
 | `MIRRORING_ADMIN_SITE` | Optional dotted path to a custom `AdminSite` (e.g. `"core.admin.site"`) |
 | `MIRRORING_POSTGRES_CLIENT_MAJOR` | Minimum `pg_dump` / `psql` major (default: `15`) |

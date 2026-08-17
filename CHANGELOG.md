@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-08-17
+
+### Removed
+
+- `MIRROR_AUTH_USER_DB_TABLE` — user table for Dumpling staff rules and post-restore
+  password fixes always comes from `get_user_model()._meta.db_table`.
+
 ## [0.2.2] - 2026-08-17
 
 ### Removed

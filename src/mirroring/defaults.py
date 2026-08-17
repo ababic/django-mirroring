@@ -6,7 +6,6 @@ import os
 
 from pathlib import Path
 
-from django.conf import settings
 from django.contrib.auth import get_user_model
 
 
@@ -56,8 +55,5 @@ def mirror_restore_staff_email_domains() -> list[str]:
 
 def auth_user_db_table() -> str:
     """Return the qualified public auth user table for Dumpling rules and post-restore SQL."""
-    configured = getattr(settings, "MIRROR_AUTH_USER_DB_TABLE", None)
-    if configured:
-        return configured if "." in configured else f"public.{configured}"
     table = get_user_model()._meta.db_table
     return table if "." in table else f"public.{table}"
