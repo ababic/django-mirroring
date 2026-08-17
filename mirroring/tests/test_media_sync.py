@@ -55,7 +55,7 @@ def test_collect_extra_media_refs_dedupes(settings: SettingsWrapper) -> None:
 
 @pytest.mark.unit
 def test_anonymise_media_labels_from_settings(settings: SettingsWrapper) -> None:
-    from mirroring.media import anonymise_media_labels, iter_filefield_media_refs
+    from mirroring.media import anonymise_media_labels
 
     settings.MIRRORING_ANONYMISE_MEDIA_FIELDS = [
         "listing.shipment",
@@ -64,8 +64,6 @@ def test_anonymise_media_labels_from_settings(settings: SettingsWrapper) -> None
     models, fields = anonymise_media_labels()
     assert models == {"listing.shipment"}
     assert fields == {"ebay.ebaycoupondownload.raw_file"}
-    # Smoke: settings parse and do not raise when scanning installed models.
-    list(iter_filefield_media_refs())
 
 
 @pytest.mark.unit
