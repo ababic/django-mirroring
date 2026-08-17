@@ -48,14 +48,17 @@ On every push and pull request, GitHub Actions:
 - Runs a Python 3.12–3.14 compatibility matrix
 
 Creating a GitHub release publishes to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/).
-Before the first release, add a **pending publisher** on PyPI:
+Before the first release, configure:
+
+1. A GitHub Actions environment named `pypi` on this repository
+2. A **pending publisher** on PyPI with:
 
 | Field | Value |
 |-------|-------|
 | Owner | `ababic` |
 | Repository | `django-mirroring` |
 | Workflow | `publish.yml` |
-| Environment | *(leave blank unless you also create a matching GitHub Actions environment)* |
+| Environment | `pypi` |
 
 ## Code review
 
