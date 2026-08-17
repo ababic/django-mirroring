@@ -20,7 +20,6 @@ from mirroring.management.postgres_clone import (
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
-    from pytest_django.fixtures import SettingsWrapper
 
 
 @pytest.mark.unit
@@ -40,24 +39,6 @@ def test_revert_requires_confirm(monkeypatch: MonkeyPatch) -> None:
 def test_revert_requires_allow(monkeypatch: MonkeyPatch) -> None:
     monkeypatch.delenv("MIRROR_RESTORE_ALLOW", raising=False)
     with pytest.raises(CommandError, match="MIRROR_RESTORE_ALLOW=1"):
-        call_command("revert_mirror_restore", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_revert_refuses_blocked_target_host(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES = ["prod.example"]
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@db.prod.example:5432/staging")
-    with pytest.raises(CommandError, match="blocked host suffix"):
-        call_command("revert_mirror_restore", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_revert_confirm_requires_target_allowlist(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES = []
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")
-    with pytest.raises(CommandError, match="MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES"):
         call_command("revert_mirror_restore", "--confirm", stdout=StringIO())
 
 

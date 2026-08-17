@@ -22,7 +22,6 @@ from mirroring.management.postgres_clone import (
 
 if TYPE_CHECKING:
     from pytest import MonkeyPatch
-    from pytest_django.fixtures import SettingsWrapper
 
 
 @pytest.mark.unit
@@ -60,42 +59,6 @@ def test_refresh_refuses_same_source_and_target(monkeypatch: MonkeyPatch) -> Non
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@db.example:5432/anon")
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@db.example:5432/anon")
     with pytest.raises(CommandError, match="same host/port/database"):
-        call_command("restore_from_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_refresh_refuses_blocked_target_host(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES = ["prod.example"]
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
-    monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@db.prod.example:5432/staging")
-    with pytest.raises(CommandError, match="blocked host suffix"):
-        call_command("restore_from_mirror", "--confirm", stdout=StringIO())
-
-
-@pytest.mark.unit
-def test_refresh_refuses_partial_suffix_false_positive(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES = ["staging.example.com"]
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
-    # Would incorrectly match a naive endswith("staging.example.com") check.
-    monkeypatch.setenv(
-        "MIRROR_RESTORE_TARGET_DATABASE_URL",
-        "postgres://u:p@notstaging.example.com:5432/staging",
-    )
-    with patch("mirroring.management.commands.restore_from_mirror.require_postgres_clients"):
-        out = StringIO()
-        call_command("restore_from_mirror", "--dry-run", stdout=out)
-    assert "Dry run complete" in out.getvalue()
-
-
-@pytest.mark.unit
-def test_refresh_confirm_requires_target_allowlist(settings: SettingsWrapper, monkeypatch: MonkeyPatch) -> None:
-    settings.MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES = []
-    monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
-    monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
-    monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")
-    with pytest.raises(CommandError, match="MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES"):
         call_command("restore_from_mirror", "--confirm", stdout=StringIO())
 
 
@@ -163,15 +126,6 @@ def test_dump_line_filter_preserves_copy_payload_resembling_set() -> None:
     assert b"SET transaction_timeout = 0;\n" not in kept.split(b"COPY", 1)[0]
     assert b"COPY public.t (note) FROM stdin;\nSET transaction_timeout = 0;\n\\.\n" in kept
     assert b"SET client_encoding = 'UTF8';\n" in kept
-
-
-@pytest.mark.unit
-def test_host_matches_suffix_requires_dot_boundary() -> None:
-    from mirroring.management.postgres_clone import host_matches_suffix
-
-    assert host_matches_suffix("db.staging.example.com", "staging.example.com")
-    assert host_matches_suffix("staging.example.com", "staging.example.com")
-    assert not host_matches_suffix("notstaging.example.com", "staging.example.com")
 
 
 @pytest.mark.unit
@@ -282,11 +236,9 @@ def test_stamp_restored_at_requires_allow(monkeypatch: MonkeyPatch) -> None:
 
 @pytest.mark.unit
 def test_restore_soft_fails_watermark_after_cutover(
-    settings: SettingsWrapper,
     monkeypatch: MonkeyPatch,
 ) -> None:
     """Cutover success must not become a failed restore if watermark write fails."""
-    settings.MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES = ["staging.example"]
     monkeypatch.setenv("MIRROR_RESTORE_ALLOW", "1")
     monkeypatch.setenv("MIRROR_DATABASE_URL", "postgres://u:p@anon.example:5432/anon")
     monkeypatch.setenv("MIRROR_RESTORE_TARGET_DATABASE_URL", "postgres://u:p@staging.example:5432/staging")

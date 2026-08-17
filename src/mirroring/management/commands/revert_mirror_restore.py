@@ -3,7 +3,7 @@
 After a successful restore cutover the previous live database remains as
 ``{target}_preswap``. This command swaps it back:
 
-1. Preflight — ``MIRROR_RESTORE_ALLOW``, allow/block host suffixes.
+1. Preflight — ``MIRROR_RESTORE_ALLOW`` (target comes from env URL).
 2. Require ``{target}_preswap`` to exist (otherwise nothing to revert).
 3. Park live ``{target}`` → ``{target}_backout`` (frees the live name).
 4. Rename ``{target}_preswap`` → ``{target}``.
@@ -28,15 +28,12 @@ import subprocess
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-from django.conf import settings
 from django.core.management.base import CommandError
 
 from mirroring.base import BaseMirroringCommand
 from mirroring.management.postgres_clone import (
     backout_database_name,
-    database_identity,
     database_name,
-    host_matches_suffix,
     postgres_database_exists,
     preswap_database_name,
     redact_database_url,
@@ -78,7 +75,6 @@ class Command(BaseMirroringCommand):
             raise CommandError(f"Refusing to run unless {MIRROR_RESTORE_ALLOW_ENV}=1.")
 
         target_url = self.require_env_url(TARGET_URL_ENV)
-        self.assert_safe_target(target_url, require_allowed_host=not dry_run)
         target_db = database_name(target_url)
         try:
             preswap_name = preswap_database_name(target_db)
@@ -135,18 +131,6 @@ class Command(BaseMirroringCommand):
         if urlparse(value).scheme not in {"postgres", "postgresql"}:
             raise CommandError(f"{env_var} must be a postgres:// or postgresql:// URL.")
         return value
-
-    def assert_safe_target(self, target_url: str, *, require_allowed_host: bool) -> None:
-        allowed_hosts = list(getattr(settings, "MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES", []))
-        target_host = database_identity(target_url)[0]
-        if allowed_hosts and not any(host_matches_suffix(target_host, s) for s in allowed_hosts):
-            raise CommandError(f"Target host {target_host!r} is not in MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
-
-        blocked = list(getattr(settings, "MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES", []))
-        if any(host_matches_suffix(target_host, s) for s in blocked):
-            raise CommandError(f"Target host {target_host!r} matches a blocked host suffix.")
-        if require_allowed_host and not allowed_hosts:
-            raise CommandError("Refusing a destructive revert without MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 
     def run_checked(
         self,

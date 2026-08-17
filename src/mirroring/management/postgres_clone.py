@@ -106,13 +106,6 @@ def keep_dump_line(raw: bytes) -> bool:
     return DumpLineFilter().keep(raw)
 
 
-def host_matches_suffix(host: str, suffix: str) -> bool:
-    """True when ``host`` equals ``suffix`` or is a subdomain of it (dot boundary)."""
-    host = host.lower().rstrip(".")
-    suffix = suffix.lower().rstrip(".")
-    return host == suffix or host.endswith(f".{suffix}")
-
-
 def run_psql_statements(
     *,
     server_url: str,

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-17
+
+### Removed
+
+- `MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES` / `MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES`
+  and `host_matches_suffix` — restore/revert target whatever
+  `MIRROR_RESTORE_TARGET_DATABASE_URL` points at (still gated by
+  `MIRROR_RESTORE_ALLOW=1`, `--confirm`, and source≠target).
+
 ## [0.2.1] - 2026-08-17
 
 ### Removed

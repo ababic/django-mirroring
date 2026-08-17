@@ -87,8 +87,6 @@ wire env → settings in one place).
 | `MIRROR_RESTORE_TARGET_DATABASE_URL` | Staging DB replaced by `restore_from_mirror` |
 | `MIRROR_RESTORE_ALLOW` | Must be `1` to run restore/revert |
 | `MIRROR_RESTORE_STAFF_EMAIL_DOMAINS` | Comma-separated staff email domains (username keep + restore rematerialisation) |
-| `MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES` | Allow-list for restore target hosts (fail closed when empty) |
-| `MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES` | Block-list for restore target hosts |
 | `MIRROR_AUTH_USER_DB_TABLE` | Optional qualified user table (default: `get_user_model()._meta.db_table`) |
 | `MIRRORING_AUTO_REGISTER_ADMIN` | Register admin model (default: `True`) |
 | `MIRRORING_ADMIN_SITE` | Optional dotted path to a custom `AdminSite` (e.g. `"core.admin.site"`) |
@@ -98,8 +96,11 @@ wire env → settings in one place).
 
 ## Endpoint guidance (operators)
 
-Refresh only refuses when source and destination resolve to the **same**
-host/port/database. Credential choice is otherwise an operator responsibility:
+Refresh and restore only refuse when source and destination resolve to the
+**same** host/port/database (restore/revert also require `MIRROR_RESTORE_ALLOW=1`
+and `--confirm`). Which databases those env URLs point at is otherwise an
+operator responsibility — document your project's URLs carefully; there is no
+hostname allow/block list in the package:
 
 - Prefer pointing `MIRROR_SOURCE_DATABASE_URL` at a **full-access** follower or
   offline replica so `pg_dump` can read every table Dumpling anonymises, and so
@@ -108,17 +109,14 @@ host/port/database. Credential choice is otherwise an operator responsibility:
 - Prefer pointing `MIRROR_DATABASE_URL` at a **separate** mirror database from the
   live app primary. The destination role needs `CREATEDB` for shadow load + rename
   cutover.
+- Point `MIRROR_RESTORE_TARGET_DATABASE_URL` only at a disposable staging (or
+  equivalent) database you intend to replace.
 - A restricted / allow-listed role that cannot `SELECT` PII tables will produce an
   incomplete or failing dump — use full-access credentials for the source.
 - Put `sslmode` on connection URLs when the server requires TLS (no hostname-based
   SSL inference).
 - Omit provider schemas (e.g. Heroku's `heroku_ext` / `_heroku`) via
   `MIRROR_EXCLUDED_SCHEMA` in the host project when needed.
-
-Restore/revert use configurable host allow/block lists
-(`MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES` /
-`MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES`) rather than hardcoded production
-URL env vars.
 
 ## Management commands
 

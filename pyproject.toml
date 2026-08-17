@@ -1,6 +1,6 @@
 [project]
 name = "django-mirroring"
-version = "0.2.1"
+version = "0.2.2"
 description = "Django add-on for production database mirror refresh and staging restore (Dumpling + Postgres shadow cutover)"
 readme = "README.md"
 license = "MIT"

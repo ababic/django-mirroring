@@ -54,26 +54,6 @@ def mirror_restore_staff_email_domains() -> list[str]:
     ]
 
 
-def mirror_restore_allowed_target_host_suffixes() -> list[str]:
-    """Return target host suffixes; restore/revert fail closed when this is empty."""
-    return [
-        suffix.strip().lower()
-        for suffix in os.environ.get("MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES", "").split(",")
-        if suffix.strip()
-    ]
-
-
-def mirror_restore_blocked_target_host_suffixes() -> list[str]:
-    return [
-        suffix.strip().lower()
-        for suffix in os.environ.get(
-            "MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES",
-            "",
-        ).split(",")
-        if suffix.strip()
-    ]
-
-
 def auth_user_db_table() -> str:
     """Return the qualified public auth user table for Dumpling rules and post-restore SQL."""
     configured = getattr(settings, "MIRROR_AUTH_USER_DB_TABLE", None)

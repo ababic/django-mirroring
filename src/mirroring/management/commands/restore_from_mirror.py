@@ -6,8 +6,7 @@ Anonymisation already happened when the mirror was refreshed.
 
 Safe replace algorithm
 ----------------------
-1. Preflight — ``MIRROR_RESTORE_ALLOW``, distinct source/target, allow/block host
-   suffixes.
+1. Preflight — ``MIRROR_RESTORE_ALLOW`` and distinct source/target databases.
 2. Snapshot staging staff credentials (allowlisted email domains on the live
    target) and rematerialise onto the shadow by ``USERNAME_FIELD`` (username is
    kept on the database mirror; email/password are scrubbed there).
@@ -69,7 +68,6 @@ from mirroring.management.postgres_clone import (
     cutover_by_rename,
     database_identity,
     database_name,
-    host_matches_suffix,
     libpq_environ,
     preswap_database_name,
     recreate_shadow_database,
@@ -156,7 +154,7 @@ class Command(BaseMirroringCommand):
 
         source_url = self.require_env_url(SOURCE_URL_ENV)
         target_url = self.require_env_url(TARGET_URL_ENV)
-        self.assert_safe_endpoints(source_url, target_url, require_allowed_host=not dry_run)
+        self.assert_distinct_endpoints(source_url, target_url)
         target_db = database_name(target_url)
         try:
             shadow_name = shadow_database_name(target_db)
@@ -274,8 +272,7 @@ class Command(BaseMirroringCommand):
             raise CommandError(f"Refusing to run unless {MIRROR_RESTORE_ALLOW_ENV}=1.")
         source_url = self.require_env_url(SOURCE_URL_ENV)
         target_url = self.require_env_url(TARGET_URL_ENV)
-        # Reuse the same endpoint gates as restore (distinct source/target, allowlisted host).
-        self.assert_safe_endpoints(source_url, target_url, require_allowed_host=not dry_run)
+        self.assert_distinct_endpoints(source_url, target_url)
         self.render_h1("Stamp MirrorDatabaseState.restored_at" + (" (dry run)" if dry_run else ""))
         self.info(f"Target ({TARGET_URL_ENV}): {redact_database_url(target_url)}")
         if dry_run:
@@ -295,26 +292,9 @@ class Command(BaseMirroringCommand):
             raise CommandError(f"{env_var} must be a postgres:// or postgresql:// URL.")
         return value
 
-    def assert_safe_endpoints(
-        self,
-        source_url: str,
-        target_url: str,
-        *,
-        require_allowed_host: bool,
-    ) -> None:
+    def assert_distinct_endpoints(self, source_url: str, target_url: str) -> None:
         if database_identity(source_url) == database_identity(target_url):
             raise CommandError(f"{SOURCE_URL_ENV} and {TARGET_URL_ENV} resolve to the same host/port/database.")
-
-        allowed_hosts = list(getattr(settings, "MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES", []))
-        target_host = database_identity(target_url)[0]
-        if allowed_hosts and not any(host_matches_suffix(target_host, s) for s in allowed_hosts):
-            raise CommandError(f"Target host {target_host!r} is not in MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
-
-        blocked = list(getattr(settings, "MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES", []))
-        if any(host_matches_suffix(target_host, s) for s in blocked):
-            raise CommandError(f"Target host {target_host!r} matches a blocked host suffix.")
-        if require_allowed_host and not allowed_hosts:
-            raise CommandError("Refusing a destructive restore without MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES.")
 
     def snapshot_staff_credentials(
         self,
