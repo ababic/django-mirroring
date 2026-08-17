@@ -333,9 +333,7 @@ class Command(BaseMirroringCommand):
         if not staff_domains:
             return []
         if username_field not in STAFF_SNAPSHOT_COLUMNS:
-            raise CommandError(
-                f"UserModel.USERNAME_FIELD={username_field!r} is not in the staff snapshot columns."
-            )
+            raise CommandError(f"UserModel.USERNAME_FIELD={username_field!r} is not in the staff snapshot columns.")
         for domain in staff_domains:
             if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
                 raise CommandError(f"Unsafe staff email domain: {domain!r}")
