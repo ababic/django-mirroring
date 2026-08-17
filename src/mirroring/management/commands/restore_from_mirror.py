@@ -167,7 +167,6 @@ class Command(BaseMirroringCommand):
 
         user_model = get_user_model()
         username_field = user_model.USERNAME_FIELD
-        match_field = getattr(settings, "MIRROR_RESTORE_USER_MATCH_FIELD", None) or username_field
         staff_domains = list(getattr(settings, "MIRROR_RESTORE_STAFF_EMAIL_DOMAINS", []))
         user_table = user_model._meta.db_table
 
@@ -182,7 +181,7 @@ class Command(BaseMirroringCommand):
             self.info(f"Existing {preswap_name!r}: will DROP before cutover (--delete-preswap)")
         else:
             self.info(f"Existing {preswap_name!r}: refuse if present (pass --delete-preswap to drop)")
-        self.info(f"Credential match field: {match_field} (USERNAME_FIELD={username_field})")
+        self.info(f"Credential match field: {username_field} (UserModel.USERNAME_FIELD)")
         self.info(f"Staff snapshot email domains: {staff_domains or '(none — no password rematerialise)'}")
 
         if dry_run:
@@ -195,7 +194,7 @@ class Command(BaseMirroringCommand):
             staff_rows = self.snapshot_staff_credentials(
                 target_url,
                 user_table=user_table,
-                match_field=match_field,
+                username_field=username_field,
                 staff_domains=staff_domains,
             )
             self.info(f"Snapshotted {len(staff_rows)} staff credential row(s) from target.")
@@ -220,7 +219,6 @@ class Command(BaseMirroringCommand):
                 shadow_url,
                 staff_rows,
                 user_table=user_table,
-                match_field=match_field,
                 username_field=username_field,
             )
             self.info(f"Rematerialised credentials for {rematerialised} user(s).")
@@ -323,19 +321,21 @@ class Command(BaseMirroringCommand):
         target_url: str,
         *,
         user_table: str,
-        match_field: str,
+        username_field: str,
         staff_domains: list[str],
     ) -> list[dict[str, str]]:
         """Snapshot staff rows from the live target for post-restore rematerialise.
 
         Selection uses allowlisted email domains on staging (still real there).
-        Rematerialise matches on ``match_field`` (``USERNAME_FIELD`` / username),
-        which Dumpling keeps on the database mirror.
+        Rematerialise matches on ``UserModel.USERNAME_FIELD``, which Dumpling
+        keeps on the database mirror.
         """
         if not staff_domains:
             return []
-        if match_field not in STAFF_SNAPSHOT_COLUMNS:
-            raise CommandError(f"MIRROR_RESTORE_USER_MATCH_FIELD={match_field!r} is not in the staff snapshot columns.")
+        if username_field not in STAFF_SNAPSHOT_COLUMNS:
+            raise CommandError(
+                f"UserModel.USERNAME_FIELD={username_field!r} is not in the staff snapshot columns."
+            )
         for domain in staff_domains:
             if not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
                 raise CommandError(f"Unsafe staff email domain: {domain!r}")
@@ -355,18 +355,12 @@ class Command(BaseMirroringCommand):
         staff_rows: list[dict[str, str]],
         *,
         user_table: str,
-        match_field: str,
         username_field: str,
     ) -> int:
         if not staff_rows:
             return 0
-        if match_field != username_field:
-            raise CommandError(
-                f"MIRROR_RESTORE_USER_MATCH_FIELD={match_field!r} must equal "
-                f"USERNAME_FIELD={username_field!r} (username is the stable staff identity)."
-            )
         # Just before cutover: restore staging email/password/names onto rows
-        # matched by kept username (database mirror still has scrubbed values).
+        # matched by kept USERNAME_FIELD (database mirror still has scrubbed values).
         restore_columns = (
             "email",
             "password",
@@ -378,7 +372,7 @@ class Command(BaseMirroringCommand):
         )
         updated = 0
         for row in staff_rows:
-            match_value = row.get(match_field) or ""
+            match_value = row.get(username_field) or ""
             if not match_value:
                 continue
             assignments: list[str] = []
@@ -390,7 +384,7 @@ class Command(BaseMirroringCommand):
                 continue
             sql = (
                 f"UPDATE {user_table} SET {', '.join(assignments)} "
-                f"WHERE {match_field} = {self.sql_literal(match_value)}"
+                f"WHERE {username_field} = {self.sql_literal(match_value)}"
             )
             matched = self.run_capture(
                 [

@@ -54,10 +54,6 @@ def mirror_restore_staff_email_domains() -> list[str]:
     ]
 
 
-def mirror_restore_user_match_field() -> str:
-    return os.environ.get("MIRROR_RESTORE_USER_MATCH_FIELD", "username")
-
-
 def mirror_restore_allowed_target_host_suffixes() -> list[str]:
     """Return target host suffixes; restore/revert fail closed when this is empty."""
     return [

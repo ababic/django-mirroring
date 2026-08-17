@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-17
+
+### Removed
+
+- `MIRROR_RESTORE_USER_MATCH_FIELD` — staff credential rematerialise always uses `UserModel.USERNAME_FIELD`.
+
 ## [0.2.0] - 2026-08-17
 
 ### Changed

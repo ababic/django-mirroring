@@ -87,7 +87,6 @@ wire env → settings in one place).
 | `MIRROR_RESTORE_TARGET_DATABASE_URL` | Staging DB replaced by `restore_from_mirror` |
 | `MIRROR_RESTORE_ALLOW` | Must be `1` to run restore/revert |
 | `MIRROR_RESTORE_STAFF_EMAIL_DOMAINS` | Comma-separated staff email domains (username keep + restore rematerialisation) |
-| `MIRROR_RESTORE_USER_MATCH_FIELD` | User field to match on restore (default: `username`) |
 | `MIRROR_RESTORE_ALLOWED_TARGET_HOST_SUFFIXES` | Allow-list for restore target hosts (fail closed when empty) |
 | `MIRROR_RESTORE_BLOCKED_TARGET_HOST_SUFFIXES` | Block-list for restore target hosts |
 | `MIRROR_AUTH_USER_DB_TABLE` | Optional qualified user table (default: `get_user_model()._meta.db_table`) |
