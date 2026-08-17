@@ -172,6 +172,8 @@ class Command(BaseMirroringCommand):
             dummy_refs,
             dest_bucket=dest_bucket,
             dest_region=dest_region,
+            source_bucket=source_bucket,
+            source_region=source_region,
             skip_existing=skip_existing,
             dry_run=dry_run,
             limit=limit,

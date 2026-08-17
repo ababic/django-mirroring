@@ -12,7 +12,10 @@ or UI-linked paths still resolve without copying real customer content.
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import struct
+import zlib
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from importlib import import_module
@@ -34,6 +37,9 @@ _MINIMAL_CSV = b"redacted\n"
 _MINIMAL_XML = b'<?xml version="1.0" encoding="UTF-8"?><redacted/>\n'
 _MINIMAL_TEXT = b"redacted\n"
 _MINIMAL_BIN = b"redacted\n"
+_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+_IDENTICON_SIZE = 128
+_IDENTICON_CELLS = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -293,8 +299,82 @@ def collect_dummy_media_refs(
     return refs
 
 
-def default_dummy_for_key(key: str, *, private: bool = False) -> MediaDummySpec:
-    """Built-in placeholder body chosen from the object key's suffix."""
+def is_image_media_key(key: str) -> bool:
+    return PurePosixPath(key).suffix.lower() in _IMAGE_SUFFIXES
+
+
+def _png_chunk(tag: bytes, data: bytes) -> bytes:
+    crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+
+def encode_rgb_png(width: int, height: int, rows: Iterable[bytes]) -> bytes:
+    """Encode an 8-bit RGB PNG (no alpha) from raw row bytes (width * 3 each)."""
+    raw = b"".join(b"\x00" + row for row in rows)
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", ihdr)
+        + _png_chunk(b"IDAT", zlib.compress(raw, 9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def identicon_png(
+    seed: bytes,
+    *,
+    size: int = _IDENTICON_SIZE,
+    cells: int = _IDENTICON_CELLS,
+) -> bytes:
+    """Deterministic mirrored-block PNG from ``seed`` (no Pillow dependency)."""
+    digest = hashlib.sha256(seed).digest()
+    # Saturated foreground from hash; light neutral background.
+    fg = (40 + digest[0] % 180, 40 + digest[1] % 180, 40 + digest[2] % 180)
+    bg = (245, 245, 248)
+    bits = int.from_bytes(digest[3:], "big")
+    half = (cells + 1) // 2
+    grid: list[list[bool]] = []
+    bit_i = 0
+    for _row in range(cells):
+        left = [bool((bits >> (bit_i + col)) & 1) for col in range(half)]
+        bit_i += half
+        mirrored = left + (left[-2::-1] if cells % 2 else left[::-1])
+        grid.append(mirrored[:cells])
+
+    cell_px = max(1, size // cells)
+    pixel = cell_px * cells
+    rows: list[bytes] = []
+    for y in range(pixel):
+        gy = min(cells - 1, y // cell_px)
+        row = bytearray(pixel * 3)
+        for x in range(pixel):
+            gx = min(cells - 1, x // cell_px)
+            colour = fg if grid[gy][gx] else bg
+            i = x * 3
+            row[i : i + 3] = bytes(colour)
+        rows.append(bytes(row))
+    return encode_rgb_png(pixel, pixel, rows)
+
+
+def content_seed_from_s3_head(head: dict[str, Any], *, fallback_key: str) -> bytes:
+    """Prefer S3 ETag (content fingerprint) as seed; fall back to the object key."""
+    etag = str(head.get("ETag") or "").strip().strip('"')
+    if etag:
+        return f"etag:{etag}".encode()
+    return f"key:{fallback_key}".encode()
+
+
+def default_dummy_for_key(
+    key: str,
+    *,
+    private: bool = False,
+    content_seed: bytes | None = None,
+) -> MediaDummySpec:
+    """Built-in placeholder body chosen from the object key's suffix.
+
+    Image keys get a visual identicon. Pass ``content_seed`` (e.g. from the source
+    object's ETag) so placeholders vary with original content rather than only the path.
+    """
     suffix = PurePosixPath(key).suffix.lower()
     if suffix == ".pdf":
         return MediaDummySpec(body=_MINIMAL_PDF, content_type="application/pdf", private=private)
@@ -305,24 +385,24 @@ def default_dummy_for_key(key: str, *, private: bool = False) -> MediaDummySpec:
     if suffix in {".txt", ".log", ".json"}:
         content_type = "application/json" if suffix == ".json" else "text/plain"
         return MediaDummySpec(body=_MINIMAL_TEXT, content_type=content_type, private=private)
-    if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
-        # Tiny 1x1 PNG — enough for ImageField / admin thumbnails that must open.
-        png = (
-            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
-            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
-            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
-        )
-        return MediaDummySpec(body=png, content_type="image/png", private=private)
+    if is_image_media_key(key):
+        seed = content_seed if content_seed is not None else f"key:{key}".encode()
+        return MediaDummySpec(body=identicon_png(seed), content_type="image/png", private=private)
     return MediaDummySpec(body=_MINIMAL_BIN, content_type="application/octet-stream", private=private)
 
 
-def resolve_dummy_spec(ref: MediaObjectRef, provider: DummyProvider | None = None) -> MediaDummySpec:
+def resolve_dummy_spec(
+    ref: MediaObjectRef,
+    provider: DummyProvider | None = None,
+    *,
+    content_seed: bytes | None = None,
+) -> MediaDummySpec:
     """Resolve placeholder bytes via optional host provider, else suffix defaults."""
     if provider is not None:
         custom = provider(ref)
         if custom is not None:
             return custom
-    return default_dummy_for_key(ref.key, private=ref.private)
+    return default_dummy_for_key(ref.key, private=ref.private, content_seed=content_seed)
 
 
 def sync_media_refs_between_buckets(
@@ -403,21 +483,38 @@ def plant_dummy_media_refs(
     dest_bucket: str,
     dest_region: str | None = None,
     dest_client: Any | None = None,
+    source_bucket: str | None = None,
+    source_region: str | None = None,
+    source_client: Any | None = None,
     skip_existing: bool = True,
     dry_run: bool = False,
     limit: int | None = None,
     default_acl: str = "public-read",
     provider: DummyProvider | None = None,
+    images_from_source_hash: bool | None = None,
 ) -> MediaSyncStats:
-    """Put placeholder objects at ``refs`` keys on ``dest_bucket`` (no source read).
+    """Put placeholder objects at ``refs`` keys on ``dest_bucket``.
 
     Pass ``provider`` (e.g. ``load_dummy_provider()``) to honour host overrides;
-    ``None`` uses suffix defaults only.
+    ``None`` uses suffix defaults.
+
+    For image keys, when ``images_from_source_hash`` is true (default) and
+    ``source_bucket`` is set, the source object's ETag seeds a visual identicon so
+    placeholders differ by original content without copying the real bytes. If the
+    source object is missing, the key path is used as the seed instead.
     """
     import boto3
     from botocore.exceptions import ClientError
 
+    if images_from_source_hash is None:
+        images_from_source_hash = True
+        if settings.configured:
+            images_from_source_hash = bool(getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True))
+
     dst = dest_client or boto3.client("s3", region_name=dest_region)
+    src = None
+    if images_from_source_hash and source_bucket:
+        src = source_client or boto3.client("s3", region_name=source_region)
     stats = MediaSyncStats()
 
     for ref in refs:
@@ -436,11 +533,23 @@ def plant_dummy_media_refs(
                     stats.skipped_existing += 1
                     continue
 
+            content_seed: bytes | None = None
+            if is_image_media_key(key):
+                content_seed = f"key:{key}".encode()
+                if src is not None and source_bucket:
+                    try:
+                        head = src.head_object(Bucket=source_bucket, Key=key)
+                        content_seed = content_seed_from_s3_head(head, fallback_key=key)
+                    except ClientError as exc:
+                        if exc.response.get("Error", {}).get("Code") not in {"404", "NoSuchKey", "NotFound"}:
+                            raise
+                        # Keep key-based seed when the source object is gone.
+
             if dry_run:
                 stats.dummied += 1
                 continue
 
-            spec = resolve_dummy_spec(ref, provider=provider)
+            spec = resolve_dummy_spec(ref, provider=provider, content_seed=content_seed)
             private = ref.private if spec.private is None else bool(spec.private)
             acl = "private" if private else default_acl
             put_kwargs: dict[str, Any] = {

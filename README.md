@@ -109,6 +109,7 @@ optional host collectors, then `CopyObject`s only those keys.
 | `MEDIA_SYNC_DUMMY_MODELS` | Skip CopyObject **and** plant dummy objects at the same keys |
 | `MEDIA_SYNC_DUMMY_FIELDS` | Same for individual fields (`app_label.model.field`) |
 | `MEDIA_SYNC_DUMMY_PROVIDER` | Optional dotted callable `(MediaObjectRef) -> MediaDummySpec \| None` |
+| `MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH` | For image dummies, seed identicons from source ETag (default `True`) |
 | `AWS_STORAGE_BUCKET_NAME` | Destination bucket (current env) |
 
 ```bash
@@ -148,6 +149,9 @@ MEDIA_SYNC_DUMMY_MODELS = [
 MEDIA_SYNC_DUMMY_FIELDS = []
 # Optional override; return None to fall back to suffix defaults:
 # MEDIA_SYNC_DUMMY_PROVIDER = "myapp.media_sync.dummy_for_ref"
+# Image dummies: visual identicons seeded from the source object's ETag
+# (content fingerprint) so placeholders differ without copying real bytes.
+# MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH = True  # default
 ```
 
 ## Admin

@@ -80,6 +80,31 @@ def test_default_dummy_for_key_by_suffix() -> None:
 
 
 @pytest.mark.unit
+def test_identicon_png_is_deterministic_and_varies_by_seed() -> None:
+    from mirroring.media import identicon_png
+
+    a = identicon_png(b"etag:abc")
+    b = identicon_png(b"etag:abc")
+    c = identicon_png(b"etag:xyz")
+    assert a.startswith(b"\x89PNG")
+    assert a == b
+    assert a != c
+    assert len(a) > 100
+
+
+@pytest.mark.unit
+def test_image_dummy_uses_content_seed() -> None:
+    from mirroring.media import default_dummy_for_key
+
+    by_key = default_dummy_for_key("photos/a.jpg")
+    by_etag = default_dummy_for_key("photos/a.jpg", content_seed=b"etag:111")
+    by_etag_same = default_dummy_for_key("photos/other.jpg", content_seed=b"etag:111")
+    assert by_key.content_type == "image/png"
+    assert by_key.body != by_etag.body
+    assert by_etag.body == by_etag_same.body
+
+
+@pytest.mark.unit
 def test_plant_dummy_media_refs_put_object() -> None:
     from mirroring.media import plant_dummy_media_refs
 
@@ -101,6 +126,7 @@ def test_plant_dummy_media_refs_put_object() -> None:
         dest_client=dst,
         skip_existing=True,
         dry_run=False,
+        images_from_source_hash=False,
     )
     assert stats.referenced == 2
     assert stats.skipped_existing == 1
@@ -109,6 +135,31 @@ def test_plant_dummy_media_refs_put_object() -> None:
     assert dst.put_object.call_args.kwargs["Key"] == "fresh.pdf"
     assert dst.put_object.call_args.kwargs["ACL"] == "private"
     assert dst.put_object.call_args.kwargs["Body"].startswith(b"%PDF")
+
+
+@pytest.mark.unit
+def test_plant_dummy_image_uses_source_etag_seed() -> None:
+    from mirroring.media import identicon_png, plant_dummy_media_refs
+
+    src = MagicMock()
+    dst = MagicMock()
+    dst.head_object.side_effect = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+    src.head_object.return_value = {"ETag": '"deadbeef"'}
+
+    stats = plant_dummy_media_refs(
+        [MediaObjectRef("brand-images/x.jpg", private=False)],
+        dest_bucket="staging",
+        dest_client=dst,
+        source_bucket="prod",
+        source_client=src,
+        skip_existing=True,
+        dry_run=False,
+        images_from_source_hash=True,
+    )
+    assert stats.dummied == 1
+    body = dst.put_object.call_args.kwargs["Body"]
+    assert body == identicon_png(b"etag:deadbeef")
+    assert dst.put_object.call_args.kwargs["ContentType"] == "image/png"
 
 
 @pytest.mark.unit
