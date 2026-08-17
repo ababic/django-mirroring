@@ -4,6 +4,10 @@ Intended as a post-``restore_from_mirror`` companion: the restored database alre
 points at storage keys, but staging uses a separate bucket from production. Sync
 only keys that appear in FileField / ImageField columns (plus optional host
 collectors), not the whole prod bucket.
+
+PII-bearing fields can be skipped (``MEDIA_SYNC_EXCLUDE_*``) and optionally replaced
+with harmless dummy objects at the same keys (``MEDIA_SYNC_DUMMY_*``) so non-nullable
+or UI-linked paths still resolve without copying real customer content.
 """
 
 from __future__ import annotations
@@ -12,6 +16,7 @@ import logging
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from importlib import import_module
+from pathlib import PurePosixPath
 from typing import Any
 
 from django.apps import apps
@@ -22,20 +27,39 @@ from django.db.models.fields.files import FieldFile, FileField
 logger = logging.getLogger(__name__)
 
 ExtraCollector = Callable[[], Iterable[str]]
+DummyProvider = Callable[["MediaObjectRef"], "MediaDummySpec | None"]
+
+_MINIMAL_PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
+_MINIMAL_CSV = b"redacted\n"
+_MINIMAL_XML = b'<?xml version="1.0" encoding="UTF-8"?><redacted/>\n'
+_MINIMAL_TEXT = b"redacted\n"
+_MINIMAL_BIN = b"redacted\n"
 
 
 @dataclass(frozen=True, slots=True)
 class MediaObjectRef:
-    """One object to sync. ``key`` is the wire key inside the bucket (incl. storage location)."""
+    """One object to sync or replace. ``key`` is the wire key inside the bucket."""
 
     key: str
     private: bool = False
+    model_label: str = ""
+    field_name: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MediaDummySpec:
+    """Bytes + headers for a placeholder object planted on the destination bucket."""
+
+    body: bytes
+    content_type: str
+    private: bool | None = None
 
 
 @dataclass(slots=True)
 class MediaSyncStats:
     referenced: int = 0
     copied: int = 0
+    dummied: int = 0
     skipped_existing: int = 0
     missing_source: int = 0
     errors: int = 0
@@ -63,40 +87,95 @@ def _normalized_label_set(values: Iterable[str] | None) -> set[str]:
     return {str(value).strip().lower() for value in (values or []) if str(value).strip()}
 
 
+def sync_exclude_model_labels(
+    exclude_models: set[str] | None = None,
+    dummy_models: set[str] | None = None,
+) -> set[str]:
+    """Models omitted from real CopyObject sync (explicit excludes ∪ dummy targets)."""
+    excluded = exclude_models if exclude_models is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
+    )
+    dummies = dummy_models if dummy_models is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)
+    )
+    return excluded | dummies
+
+
+def sync_exclude_field_labels(
+    exclude_fields: set[str] | None = None,
+    dummy_fields: set[str] | None = None,
+) -> set[str]:
+    """Fields omitted from real CopyObject sync (explicit excludes ∪ dummy targets)."""
+    excluded = exclude_fields if exclude_fields is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
+    )
+    dummies = dummy_fields if dummy_fields is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)
+    )
+    return excluded | dummies
+
+
+def _iter_concrete_filefield_models() -> Iterator[tuple[Any, str, list[Any]]]:
+    for model in apps.get_models():
+        label = model._meta.label_lower
+        file_fields = [field for field in model._meta.concrete_fields if isinstance(field, FileField)]
+        if file_fields:
+            yield model, label, file_fields
+
+
 def iter_filefield_media_refs(
     *,
     exclude_models: set[str] | None = None,
     exclude_fields: set[str] | None = None,
+    dummy_models: set[str] | None = None,
+    dummy_fields: set[str] | None = None,
+    only_dummy: bool = False,
 ) -> Iterator[MediaObjectRef]:
-    """Yield distinct media refs from every concrete FileField / ImageField.
+    """Yield distinct media refs from concrete FileField / ImageField columns.
 
-    ``exclude_models`` entries are ``app_label.model`` (case-insensitive).
-    ``exclude_fields`` entries are ``app_label.model.field`` (case-insensitive).
-    When omitted, values come from ``MEDIA_SYNC_EXCLUDE_MODELS`` /
-    ``MEDIA_SYNC_EXCLUDE_FIELDS``.
+    When ``only_dummy`` is false (default), yields refs for sync — skipping models /
+    fields in ``MEDIA_SYNC_EXCLUDE_*`` and ``MEDIA_SYNC_DUMMY_*``.
+
+    When ``only_dummy`` is true, yields only refs matching ``MEDIA_SYNC_DUMMY_MODELS``
+    / ``MEDIA_SYNC_DUMMY_FIELDS`` (for placeholder planting).
     """
-    excluded_models = exclude_models if exclude_models is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
+    dummy_model_set = dummy_models if dummy_models is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)
     )
-    excluded_fields = exclude_fields if exclude_fields is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
+    dummy_field_set = dummy_fields if dummy_fields is not None else _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)
     )
+    if only_dummy:
+        skip_models = set()
+        skip_fields = set()
+    else:
+        skip_models = sync_exclude_model_labels(exclude_models, dummy_model_set)
+        skip_fields = sync_exclude_field_labels(exclude_fields, dummy_field_set)
+
     seen: set[str] = set()
-    for model in apps.get_models():
-        label = model._meta.label_lower
-        if label in excluded_models:
+    for model, label, all_file_fields in _iter_concrete_filefield_models():
+        if label in skip_models:
             continue
-        file_fields = [
-            field
-            for field in model._meta.concrete_fields
-            if isinstance(field, FileField) and f"{label}.{field.name.lower()}" not in excluded_fields
-        ]
-        if not file_fields:
+        if only_dummy and label not in dummy_model_set and not any(
+            f"{label}.{field.name.lower()}" in dummy_field_set for field in all_file_fields
+        ):
             continue
-        field_names = [field.name for field in file_fields]
+
+        selected_fields = []
+        for field in all_file_fields:
+            field_label = f"{label}.{field.name.lower()}"
+            if only_dummy:
+                if label in dummy_model_set or field_label in dummy_field_set:
+                    selected_fields.append(field)
+            elif field_label not in skip_fields:
+                selected_fields.append(field)
+        if not selected_fields:
+            continue
+
+        field_names = [field.name for field in selected_fields]
         queryset = model.objects.all().values_list(*field_names).iterator(chunk_size=2000)
-        storage_by_name = {field.name: field.storage for field in file_fields}
-        private_by_name = {field.name: storage_is_private(field.storage) for field in file_fields}
+        storage_by_name = {field.name: field.storage for field in selected_fields}
+        private_by_name = {field.name: storage_is_private(field.storage) for field in selected_fields}
         for row in queryset:
             for field_name, value in zip(field_names, row, strict=True):
                 name = getattr(value, "name", value) if isinstance(value, FieldFile) else value
@@ -106,7 +185,12 @@ def iter_filefield_media_refs(
                 if not key or key in seen:
                     continue
                 seen.add(key)
-                yield MediaObjectRef(key=key, private=private_by_name[field_name])
+                yield MediaObjectRef(
+                    key=key,
+                    private=private_by_name[field_name],
+                    model_label=label,
+                    field_name=field_name,
+                )
 
 
 def load_extra_collectors(dotted_paths: Iterable[str] | None = None) -> list[ExtraCollector]:
@@ -123,6 +207,21 @@ def load_extra_collectors(dotted_paths: Iterable[str] | None = None) -> list[Ext
             raise TypeError(f"{path} is not callable")
         collectors.append(collector)
     return collectors
+
+
+def load_dummy_provider(dotted_path: str | None = None) -> DummyProvider | None:
+    """Import optional ``MEDIA_SYNC_DUMMY_PROVIDER`` callable."""
+    path = dotted_path if dotted_path is not None else getattr(settings, "MEDIA_SYNC_DUMMY_PROVIDER", None)
+    if not path:
+        return None
+    module_path, _, attr = str(path).rpartition(".")
+    if not module_path or not attr:
+        raise ValueError(f"Invalid MEDIA_SYNC_DUMMY_PROVIDER: {path!r}")
+    module = import_module(module_path)
+    provider = getattr(module, attr)
+    if not callable(provider):
+        raise TypeError(f"{path} is not callable")
+    return provider
 
 
 def iter_extra_media_refs(collectors: Iterable[ExtraCollector] | None = None) -> Iterator[MediaObjectRef]:
@@ -149,8 +248,10 @@ def collect_referenced_media_refs(
     extra_collectors: Iterable[ExtraCollector] | None = None,
     exclude_models: set[str] | None = None,
     exclude_fields: set[str] | None = None,
+    dummy_models: set[str] | None = None,
+    dummy_fields: set[str] | None = None,
 ) -> list[MediaObjectRef]:
-    """Return deduped media refs from FileFields and optional host collectors."""
+    """Return deduped media refs to CopyObject from the source bucket."""
     seen: set[str] = set()
     refs: list[MediaObjectRef] = []
     streams: list[Iterator[MediaObjectRef]] = []
@@ -159,6 +260,9 @@ def collect_referenced_media_refs(
             iter_filefield_media_refs(
                 exclude_models=exclude_models,
                 exclude_fields=exclude_fields,
+                dummy_models=dummy_models,
+                dummy_fields=dummy_fields,
+                only_dummy=False,
             )
         )
     streams.append(iter_extra_media_refs(extra_collectors))
@@ -170,6 +274,55 @@ def collect_referenced_media_refs(
             refs.append(ref)
     refs.sort(key=lambda item: item.key)
     return refs
+
+
+def collect_dummy_media_refs(
+    *,
+    dummy_models: set[str] | None = None,
+    dummy_fields: set[str] | None = None,
+) -> list[MediaObjectRef]:
+    """Return deduped refs that should receive placeholder objects (not prod copies)."""
+    refs = list(
+        iter_filefield_media_refs(
+            dummy_models=dummy_models,
+            dummy_fields=dummy_fields,
+            only_dummy=True,
+        )
+    )
+    refs.sort(key=lambda item: item.key)
+    return refs
+
+
+def default_dummy_for_key(key: str, *, private: bool = False) -> MediaDummySpec:
+    """Built-in placeholder body chosen from the object key's suffix."""
+    suffix = PurePosixPath(key).suffix.lower()
+    if suffix == ".pdf":
+        return MediaDummySpec(body=_MINIMAL_PDF, content_type="application/pdf", private=private)
+    if suffix == ".csv":
+        return MediaDummySpec(body=_MINIMAL_CSV, content_type="text/csv", private=private)
+    if suffix in {".xml", ".xsl", ".xslt"}:
+        return MediaDummySpec(body=_MINIMAL_XML, content_type="application/xml", private=private)
+    if suffix in {".txt", ".log", ".json"}:
+        content_type = "application/json" if suffix == ".json" else "text/plain"
+        return MediaDummySpec(body=_MINIMAL_TEXT, content_type=content_type, private=private)
+    if suffix in {".jpg", ".jpeg", ".png", ".gif", ".webp"}:
+        # Tiny 1x1 PNG — enough for ImageField / admin thumbnails that must open.
+        png = (
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x02\x00\x00\x00\x90wS\xde\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00"
+            b"\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        return MediaDummySpec(body=png, content_type="image/png", private=private)
+    return MediaDummySpec(body=_MINIMAL_BIN, content_type="application/octet-stream", private=private)
+
+
+def resolve_dummy_spec(ref: MediaObjectRef, provider: DummyProvider | None = None) -> MediaDummySpec:
+    """Resolve placeholder bytes via optional host provider, else suffix defaults."""
+    if provider is not None:
+        custom = provider(ref)
+        if custom is not None:
+            return custom
+    return default_dummy_for_key(ref.key, private=ref.private)
 
 
 def sync_media_refs_between_buckets(
@@ -235,11 +388,73 @@ def sync_media_refs_between_buckets(
             }
             if acl:
                 copy_kwargs["ACL"] = acl
-            # Cross-region copy needs the destination client; MetadataDirective COPY is default.
             dst.copy_object(**copy_kwargs)
             stats.copied += 1
         except Exception:
             stats.errors += 1
             logger.exception("Failed syncing media key %s", key)
+
+    return stats
+
+
+def plant_dummy_media_refs(
+    refs: Iterable[MediaObjectRef],
+    *,
+    dest_bucket: str,
+    dest_region: str | None = None,
+    dest_client: Any | None = None,
+    skip_existing: bool = True,
+    dry_run: bool = False,
+    limit: int | None = None,
+    default_acl: str = "public-read",
+    provider: DummyProvider | None = None,
+) -> MediaSyncStats:
+    """Put placeholder objects at ``refs`` keys on ``dest_bucket`` (no source read).
+
+    Pass ``provider`` (e.g. ``load_dummy_provider()``) to honour host overrides;
+    ``None`` uses suffix defaults only.
+    """
+    import boto3
+    from botocore.exceptions import ClientError
+
+    dst = dest_client or boto3.client("s3", region_name=dest_region)
+    stats = MediaSyncStats()
+
+    for ref in refs:
+        if limit is not None and stats.referenced >= limit:
+            break
+        stats.referenced += 1
+        key = ref.key
+        try:
+            if skip_existing:
+                try:
+                    dst.head_object(Bucket=dest_bucket, Key=key)
+                except ClientError as exc:
+                    if exc.response.get("Error", {}).get("Code") not in {"404", "NoSuchKey", "NotFound"}:
+                        raise
+                else:
+                    stats.skipped_existing += 1
+                    continue
+
+            if dry_run:
+                stats.dummied += 1
+                continue
+
+            spec = resolve_dummy_spec(ref, provider=provider)
+            private = ref.private if spec.private is None else bool(spec.private)
+            acl = "private" if private else default_acl
+            put_kwargs: dict[str, Any] = {
+                "Bucket": dest_bucket,
+                "Key": key,
+                "Body": spec.body,
+                "ContentType": spec.content_type,
+            }
+            if acl:
+                put_kwargs["ACL"] = acl
+            dst.put_object(**put_kwargs)
+            stats.dummied += 1
+        except Exception:
+            stats.errors += 1
+            logger.exception("Failed planting dummy media key %s", key)
 
     return stats

@@ -68,6 +68,50 @@ def test_normalized_label_set_and_exclude_settings(settings: SettingsWrapper) ->
 
 
 @pytest.mark.unit
+def test_default_dummy_for_key_by_suffix() -> None:
+    from mirroring.media import default_dummy_for_key
+
+    pdf = default_dummy_for_key("labels/dispatch/a.pdf", private=True)
+    assert pdf.content_type == "application/pdf"
+    assert pdf.body.startswith(b"%PDF")
+    assert pdf.private is True
+    csv = default_dummy_for_key("exports/a.csv")
+    assert csv.content_type == "text/csv"
+
+
+@pytest.mark.unit
+def test_plant_dummy_media_refs_put_object() -> None:
+    from mirroring.media import plant_dummy_media_refs
+
+    dst = MagicMock()
+
+    def dst_head(*, Bucket: str, Key: str):
+        if Key == "already.pdf":
+            return {}
+        raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+
+    dst.head_object.side_effect = dst_head
+    refs = [
+        MediaObjectRef("already.pdf", private=True, model_label="listing.shipment", field_name="dispatch_label_file"),
+        MediaObjectRef("fresh.pdf", private=True, model_label="listing.shipment", field_name="dispatch_label_file"),
+    ]
+    stats = plant_dummy_media_refs(
+        refs,
+        dest_bucket="staging",
+        dest_client=dst,
+        skip_existing=True,
+        dry_run=False,
+    )
+    assert stats.referenced == 2
+    assert stats.skipped_existing == 1
+    assert stats.dummied == 1
+    dst.put_object.assert_called_once()
+    assert dst.put_object.call_args.kwargs["Key"] == "fresh.pdf"
+    assert dst.put_object.call_args.kwargs["ACL"] == "private"
+    assert dst.put_object.call_args.kwargs["Body"].startswith(b"%PDF")
+
+
+@pytest.mark.unit
 def test_sync_media_refs_skip_existing_and_missing() -> None:
     src = MagicMock()
     dst = MagicMock()
@@ -134,8 +178,14 @@ def test_sync_referenced_media_dry_run(monkeypatch: MonkeyPatch, settings: Setti
     monkeypatch.setenv("MEDIA_SYNC_SOURCE_BUCKET", "prod-bucket")
     monkeypatch.setenv("MEDIA_SYNC_SOURCE_REGION", "eu-central-1")
 
-    with patch("mirroring.management.commands.sync_referenced_media.sync_media_refs_between_buckets") as sync_mock:
+    with (
+        patch("mirroring.management.commands.sync_referenced_media.sync_media_refs_between_buckets") as sync_mock,
+        patch("mirroring.management.commands.sync_referenced_media.plant_dummy_media_refs") as dummy_mock,
+        patch("mirroring.management.commands.sync_referenced_media.collect_dummy_media_refs") as collect_dummy,
+    ):
         sync_mock.return_value = MediaSyncStats(referenced=2, copied=2)
+        dummy_mock.return_value = MediaSyncStats(referenced=0, dummied=0)
+        collect_dummy.return_value = []
         out = StringIO()
         call_command("sync_referenced_media", "--dry-run", stdout=out)
 
@@ -143,4 +193,5 @@ def test_sync_referenced_media_dry_run(monkeypatch: MonkeyPatch, settings: Setti
     assert sync_mock.call_args.kwargs["dry_run"] is True
     assert sync_mock.call_args.kwargs["source_bucket"] == "prod-bucket"
     assert sync_mock.call_args.kwargs["dest_bucket"] == "staging-bucket"
+    assert dummy_mock.called
     assert "Dry run complete" in out.getvalue()

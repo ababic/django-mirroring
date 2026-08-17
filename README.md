@@ -106,6 +106,9 @@ optional host collectors, then `CopyObject`s only those keys.
 | `MEDIA_SYNC_EXTRA_COLLECTORS` | List of dotted callables yielding extra relative keys (JSON path bags, CharFields, …) |
 | `MEDIA_SYNC_EXCLUDE_MODELS` | Skip whole models: `app_label.model` (e.g. `images.rendition`) |
 | `MEDIA_SYNC_EXCLUDE_FIELDS` | Skip fields: `app_label.model.field` (e.g. `reskinned_inventory.picture.preview`) |
+| `MEDIA_SYNC_DUMMY_MODELS` | Skip CopyObject **and** plant dummy objects at the same keys |
+| `MEDIA_SYNC_DUMMY_FIELDS` | Same for individual fields (`app_label.model.field`) |
+| `MEDIA_SYNC_DUMMY_PROVIDER` | Optional dotted callable `(MediaObjectRef) -> MediaDummySpec \| None` |
 | `AWS_STORAGE_BUCKET_NAME` | Destination bucket (current env) |
 
 ```bash
@@ -122,14 +125,29 @@ objects).
 ```python
 # settings.py
 MEDIA_SYNC_EXCLUDE_MODELS = [
-    "listing.shipment",          # shipping labels / courier XML (customer address PII)
-    "data_reporting.exporteddata",
+    "data_reporting.exporteddata",  # skip entirely (404s OK / table usually empty)
 ]
 MEDIA_SYNC_EXCLUDE_FIELDS = [
     "reskinned_inventory.picture.thumbnail",
     "reskinned_inventory.picture.preview",
 ]
 # Omit a collector from MEDIA_SYNC_EXTRA_COLLECTORS to skip that path bag entirely.
+```
+
+### Dummy replacements for PII (non-nullable / UI-linked paths)
+
+When a FileField must stay populated (non-null, or operators open the file in admin)
+but the real object is PII, list it under ``MEDIA_SYNC_DUMMY_*``. Those keys are
+**not** copied from production; instead a tiny placeholder is `PutObject`'d at the
+same destination key (PDF/CSV/XML/PNG defaults by suffix). Optional host hook:
+
+```python
+MEDIA_SYNC_DUMMY_MODELS = [
+    "listing.shipment",  # dispatch/return labels + courier XML
+]
+MEDIA_SYNC_DUMMY_FIELDS = []
+# Optional override; return None to fall back to suffix defaults:
+# MEDIA_SYNC_DUMMY_PROVIDER = "myapp.media_sync.dummy_for_ref"
 ```
 
 ## Admin
