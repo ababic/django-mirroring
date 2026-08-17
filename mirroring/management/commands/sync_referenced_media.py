@@ -39,8 +39,8 @@ from mirroring.media import (
     anonymise_media_labels,
     collect_anonymised_media_refs,
     collect_referenced_media_refs,
-    load_dummy_provider,
-    plant_dummy_media_refs,
+    load_anonymise_provider,
+    plant_anonymised_media_refs,
     sync_media_refs_between_buckets,
 )
 
@@ -160,7 +160,7 @@ class Command(BaseMirroringCommand):
             limit=limit,
             default_acl=default_acl,
         )
-        dummy_stats = plant_dummy_media_refs(
+        anonymised_stats = plant_anonymised_media_refs(
             anonymised_refs,
             dest_bucket=dest_bucket,
             dest_region=dest_region,
@@ -170,7 +170,7 @@ class Command(BaseMirroringCommand):
             dry_run=dry_run,
             limit=limit,
             default_acl=default_acl,
-            provider=load_dummy_provider(),
+            provider=load_anonymise_provider(),
         )
 
         self.render_h2("Summary")
@@ -183,14 +183,14 @@ class Command(BaseMirroringCommand):
         if stats.errors:
             self.error(f"Copy — errors: {stats.errors:,}")
 
-        self.info(f"Anonymise — referenced: {dummy_stats.referenced:,}")
+        self.info(f"Anonymise — referenced: {anonymised_stats.referenced:,}")
         dverb = "Would plant" if dry_run else "Planted"
-        self.info(f"Anonymise — {dverb.lower()}: {dummy_stats.dummied:,}")
-        self.info(f"Anonymise — skipped (existing): {dummy_stats.skipped_existing:,}")
-        if dummy_stats.errors:
-            self.error(f"Anonymise — errors: {dummy_stats.errors:,}")
+        self.info(f"Anonymise — {dverb.lower()}: {anonymised_stats.anonymised:,}")
+        self.info(f"Anonymise — skipped (existing): {anonymised_stats.skipped_existing:,}")
+        if anonymised_stats.errors:
+            self.error(f"Anonymise — errors: {anonymised_stats.errors:,}")
 
-        if stats.errors or dummy_stats.errors:
+        if stats.errors or anonymised_stats.errors:
             raise CommandError("Referenced media sync finished with errors.")
         if dry_run:
             self.success("Dry run complete.")

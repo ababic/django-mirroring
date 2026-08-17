@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "django-mirroring"
-version = "0.1.6"
+version = "0.1.7"
 authors = [{name = "Andy Babic", email = "andy@wearecrew.com"}]
 readme = "README.md"
 license = {file = "LICENSE"}

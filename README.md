@@ -105,7 +105,7 @@ optional host collectors, then `CopyObject`s only those keys.
 | `MEDIA_SYNC_ALLOW` | Must be `1` for a live copy (`--dry-run` does not need it) |
 | `MEDIA_SYNC_EXTRA_COLLECTORS` | List of dotted callables yielding extra relative keys (JSON path bags, CharFields, …) |
 | `MIRRORING_ANONYMISE_MEDIA_FIELDS` | Models/fields to anonymise: `app.model` or `app.model.field` (skip CopyObject; plant placeholders) |
-| `MIRRORING_ANONYMISE_MEDIA_PROVIDER` | Optional dotted callable `(MediaObjectRef) -> MediaDummySpec \| None` |
+| `MIRRORING_ANONYMISE_MEDIA_PROVIDER` | Optional dotted callable `(MediaObjectRef) -> MediaAnonymiseSpec \| None` |
 | `AWS_STORAGE_BUCKET_NAME` | Destination bucket (current env) |
 
 ```bash

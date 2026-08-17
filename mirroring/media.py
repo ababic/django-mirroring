@@ -31,7 +31,7 @@ from django.db.models.fields.files import FieldFile, FileField
 logger = logging.getLogger(__name__)
 
 ExtraCollector = Callable[[], Iterable[str]]
-DummyProvider = Callable[["MediaObjectRef"], "MediaDummySpec | None"]
+AnonymiseProvider = Callable[["MediaObjectRef"], "MediaAnonymiseSpec | None"]
 
 _MINIMAL_CSV = b"redacted\n"
 _MINIMAL_XML = b'<?xml version="1.0" encoding="UTF-8"?><redacted/>\n'
@@ -54,7 +54,7 @@ class MediaObjectRef:
 
 
 @dataclass(frozen=True, slots=True)
-class MediaDummySpec:
+class MediaAnonymiseSpec:
     """Bytes + headers for a placeholder object planted on the destination bucket."""
 
     body: bytes
@@ -66,7 +66,7 @@ class MediaDummySpec:
 class MediaSyncStats:
     referenced: int = 0
     copied: int = 0
-    dummied: int = 0
+    anonymised: int = 0
     skipped_existing: int = 0
     missing_source: int = 0
     errors: int = 0
@@ -88,10 +88,6 @@ def storage_object_key(storage: Storage, name: str) -> str:
 
 def storage_is_private(storage: Storage) -> bool:
     return getattr(storage, "default_acl", None) == "private"
-
-
-def _normalized_label_set(values: Iterable[str] | None) -> set[str]:
-    return {str(value).strip().lower() for value in (values or []) if str(value).strip()}
 
 
 def parse_anonymise_media_labels(values: Iterable[str] | None) -> tuple[set[str], set[str]]:
@@ -118,49 +114,10 @@ def parse_anonymise_media_labels(values: Iterable[str] | None) -> tuple[set[str]
 def anonymise_media_labels(
     values: Iterable[str] | None = None,
 ) -> tuple[set[str], set[str]]:
-    """Return (model_labels, field_labels) for media that must not be copied as-is.
-
-    Primary setting: ``MIRRORING_ANONYMISE_MEDIA_FIELDS``.
-
-    Legacy fallback (when the primary setting is unset/empty): union of
-    ``MEDIA_SYNC_DUMMY_*`` and ``MEDIA_SYNC_EXCLUDE_*``.
-    """
+    """Return (model_labels, field_labels) from ``MIRRORING_ANONYMISE_MEDIA_FIELDS``."""
     if values is not None:
         return parse_anonymise_media_labels(values)
-
-    configured = getattr(settings, "MIRRORING_ANONYMISE_MEDIA_FIELDS", None)
-    if configured:
-        return parse_anonymise_media_labels(configured)
-
-    models = _normalized_label_set(getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)) | _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
-    )
-    fields = _normalized_label_set(getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)) | _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
-    )
-    return models, fields
-
-
-def sync_exclude_model_labels(
-    exclude_models: set[str] | None = None,
-    dummy_models: set[str] | None = None,
-) -> set[str]:
-    """Deprecated alias — prefer ``anonymise_media_labels()``."""
-    if exclude_models is not None or dummy_models is not None:
-        return (exclude_models or set()) | (dummy_models or set())
-    models, _fields = anonymise_media_labels()
-    return models
-
-
-def sync_exclude_field_labels(
-    exclude_fields: set[str] | None = None,
-    dummy_fields: set[str] | None = None,
-) -> set[str]:
-    """Deprecated alias — prefer ``anonymise_media_labels()``."""
-    if exclude_fields is not None or dummy_fields is not None:
-        return (exclude_fields or set()) | (dummy_fields or set())
-    _models, fields = anonymise_media_labels()
-    return fields
+    return parse_anonymise_media_labels(getattr(settings, "MIRRORING_ANONYMISE_MEDIA_FIELDS", None))
 
 
 def _iter_concrete_filefield_models() -> Iterator[tuple[Any, str, list[Any]]]:
@@ -175,12 +132,7 @@ def iter_filefield_media_refs(
     *,
     anonymise_models: set[str] | None = None,
     anonymise_fields: set[str] | None = None,
-    exclude_models: set[str] | None = None,
-    exclude_fields: set[str] | None = None,
-    dummy_models: set[str] | None = None,
-    dummy_fields: set[str] | None = None,
     only_anonymise: bool = False,
-    only_dummy: bool = False,
 ) -> Iterator[MediaObjectRef]:
     """Yield distinct media refs from concrete FileField / ImageField columns.
 
@@ -189,16 +141,9 @@ def iter_filefield_media_refs(
 
     When ``only_anonymise`` is true, yields only anonymised targets (for
     placeholder planting).
-
-    ``only_dummy`` / ``exclude_*`` / ``dummy_*`` remain as compatibility aliases.
     """
-    only_anonymise = only_anonymise or only_dummy
     if anonymise_models is None and anonymise_fields is None:
-        if any(v is not None for v in (exclude_models, exclude_fields, dummy_models, dummy_fields)):
-            anonymise_models = (exclude_models or set()) | (dummy_models or set())
-            anonymise_fields = (exclude_fields or set()) | (dummy_fields or set())
-        else:
-            anonymise_models, anonymise_fields = anonymise_media_labels()
+        anonymise_models, anonymise_fields = anonymise_media_labels()
     else:
         anonymise_models = anonymise_models or set()
         anonymise_fields = anonymise_fields or set()
@@ -267,22 +212,14 @@ def load_extra_collectors(dotted_paths: Iterable[str] | None = None) -> list[Ext
     return collectors
 
 
-def load_dummy_provider(dotted_path: str | None = None) -> DummyProvider | None:
-    """Import optional anonymise provider callable.
-
-    Prefers ``MIRRORING_ANONYMISE_MEDIA_PROVIDER``, then legacy
-    ``MEDIA_SYNC_DUMMY_PROVIDER``.
-    """
-    path = dotted_path
-    if path is None:
-        path = getattr(settings, "MIRRORING_ANONYMISE_MEDIA_PROVIDER", None) or getattr(
-            settings, "MEDIA_SYNC_DUMMY_PROVIDER", None
-        )
+def load_anonymise_provider(dotted_path: str | None = None) -> AnonymiseProvider | None:
+    """Import optional ``MIRRORING_ANONYMISE_MEDIA_PROVIDER`` callable."""
+    path = dotted_path if dotted_path is not None else getattr(settings, "MIRRORING_ANONYMISE_MEDIA_PROVIDER", None)
     if not path:
         return None
     module_path, _, attr = str(path).rpartition(".")
     if not module_path or not attr:
-        raise ValueError(f"Invalid anonymise media provider: {path!r}")
+        raise ValueError(f"Invalid MIRRORING_ANONYMISE_MEDIA_PROVIDER: {path!r}")
     module = import_module(module_path)
     provider = getattr(module, attr)
     if not callable(provider):
@@ -314,10 +251,6 @@ def collect_referenced_media_refs(
     extra_collectors: Iterable[ExtraCollector] | None = None,
     anonymise_models: set[str] | None = None,
     anonymise_fields: set[str] | None = None,
-    exclude_models: set[str] | None = None,
-    exclude_fields: set[str] | None = None,
-    dummy_models: set[str] | None = None,
-    dummy_fields: set[str] | None = None,
 ) -> list[MediaObjectRef]:
     """Return deduped media refs to CopyObject from the source bucket."""
     seen: set[str] = set()
@@ -328,10 +261,6 @@ def collect_referenced_media_refs(
             iter_filefield_media_refs(
                 anonymise_models=anonymise_models,
                 anonymise_fields=anonymise_fields,
-                exclude_models=exclude_models,
-                exclude_fields=exclude_fields,
-                dummy_models=dummy_models,
-                dummy_fields=dummy_fields,
                 only_anonymise=False,
             )
         )
@@ -363,23 +292,11 @@ def collect_anonymised_media_refs(
     return refs
 
 
-def collect_dummy_media_refs(
-    *,
-    dummy_models: set[str] | None = None,
-    dummy_fields: set[str] | None = None,
-) -> list[MediaObjectRef]:
-    """Deprecated alias for ``collect_anonymised_media_refs``."""
-    return collect_anonymised_media_refs(
-        anonymise_models=dummy_models,
-        anonymise_fields=dummy_fields,
-    )
-
-
 def is_image_media_key(key: str) -> bool:
     return PurePosixPath(key).suffix.lower() in _IMAGE_SUFFIXES
 
 
-def uses_content_seed_dummy(key: str) -> bool:
+def uses_content_seed_placeholder(key: str) -> bool:
     """True when placeholders should vary by source content hash (images + PDFs)."""
     return PurePosixPath(key).suffix.lower() in _CONTENT_SEED_SUFFIXES
 
@@ -494,12 +411,12 @@ def content_seed_from_s3_head(head: dict[str, Any], *, fallback_key: str) -> byt
     return f"key:{fallback_key}".encode()
 
 
-def default_dummy_for_key(
+def default_anonymise_for_key(
     key: str,
     *,
     private: bool = False,
     content_seed: bytes | None = None,
-) -> MediaDummySpec:
+) -> MediaAnonymiseSpec:
     """Built-in placeholder body chosen from the object key's suffix.
 
     Image keys get a visual identicon; PDFs get a coloured one-page placeholder.
@@ -509,31 +426,31 @@ def default_dummy_for_key(
     suffix = PurePosixPath(key).suffix.lower()
     seed = content_seed if content_seed is not None else f"key:{key}".encode()
     if suffix == ".pdf":
-        return MediaDummySpec(body=placeholder_pdf(seed), content_type="application/pdf", private=private)
+        return MediaAnonymiseSpec(body=placeholder_pdf(seed), content_type="application/pdf", private=private)
     if suffix == ".csv":
-        return MediaDummySpec(body=_MINIMAL_CSV, content_type="text/csv", private=private)
+        return MediaAnonymiseSpec(body=_MINIMAL_CSV, content_type="text/csv", private=private)
     if suffix in {".xml", ".xsl", ".xslt"}:
-        return MediaDummySpec(body=_MINIMAL_XML, content_type="application/xml", private=private)
+        return MediaAnonymiseSpec(body=_MINIMAL_XML, content_type="application/xml", private=private)
     if suffix in {".txt", ".log", ".json"}:
         content_type = "application/json" if suffix == ".json" else "text/plain"
-        return MediaDummySpec(body=_MINIMAL_TEXT, content_type=content_type, private=private)
+        return MediaAnonymiseSpec(body=_MINIMAL_TEXT, content_type=content_type, private=private)
     if is_image_media_key(key):
-        return MediaDummySpec(body=identicon_png(seed), content_type="image/png", private=private)
-    return MediaDummySpec(body=_MINIMAL_BIN, content_type="application/octet-stream", private=private)
+        return MediaAnonymiseSpec(body=identicon_png(seed), content_type="image/png", private=private)
+    return MediaAnonymiseSpec(body=_MINIMAL_BIN, content_type="application/octet-stream", private=private)
 
 
-def resolve_dummy_spec(
+def resolve_anonymise_spec(
     ref: MediaObjectRef,
-    provider: DummyProvider | None = None,
+    provider: AnonymiseProvider | None = None,
     *,
     content_seed: bytes | None = None,
-) -> MediaDummySpec:
+) -> MediaAnonymiseSpec:
     """Resolve placeholder bytes via optional host provider, else suffix defaults."""
     if provider is not None:
         custom = provider(ref)
         if custom is not None:
             return custom
-    return default_dummy_for_key(ref.key, private=ref.private, content_seed=content_seed)
+    return default_anonymise_for_key(ref.key, private=ref.private, content_seed=content_seed)
 
 
 def sync_media_refs_between_buckets(
@@ -608,7 +525,7 @@ def sync_media_refs_between_buckets(
     return stats
 
 
-def plant_dummy_media_refs(
+def plant_anonymised_media_refs(
     refs: Iterable[MediaObjectRef],
     *,
     dest_bucket: str,
@@ -621,47 +538,22 @@ def plant_dummy_media_refs(
     dry_run: bool = False,
     limit: int | None = None,
     default_acl: str = "public-read",
-    provider: DummyProvider | None = None,
-    from_source_hash: bool | None = None,
-    images_from_source_hash: bool | None = None,
+    provider: AnonymiseProvider | None = None,
 ) -> MediaSyncStats:
     """Put placeholder objects at ``refs`` keys on ``dest_bucket``.
 
-    Pass ``provider`` (e.g. ``load_dummy_provider()``) to honour host overrides;
+    Pass ``provider`` (e.g. ``load_anonymise_provider()``) to honour host overrides;
     ``None`` uses suffix defaults.
 
-    For image and PDF keys, when ``from_source_hash`` is true (default) and
-    ``source_bucket`` is set, the source object's ETag seeds a visual placeholder
-    so files differ by original content without copying real bytes. If the source
-    object is missing, the key path is used as the seed instead.
-
-    ``images_from_source_hash`` is retained as an alias of ``from_source_hash``.
+    For image and PDF keys, when ``source_bucket`` is set, the source object's ETag
+    seeds a visual placeholder so files differ by original content without copying
+    real bytes. If the source object is missing, the key path is used as the seed.
     """
     import boto3
     from botocore.exceptions import ClientError
 
-    if from_source_hash is None:
-        from_source_hash = images_from_source_hash
-    if from_source_hash is None:
-        # Always on for anonymised image/PDF placeholders unless explicitly disabled.
-        from_source_hash = True
-        if settings.configured:
-            from_source_hash = bool(
-                getattr(
-                    settings,
-                    "MIRRORING_ANONYMISE_MEDIA_FROM_SOURCE_HASH",
-                    getattr(
-                        settings,
-                        "MEDIA_SYNC_DUMMY_FROM_SOURCE_HASH",
-                        getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True),
-                    ),
-                )
-            )
-
     dst = dest_client or boto3.client("s3", region_name=dest_region)
-    src = None
-    if from_source_hash and source_bucket:
-        src = source_client or boto3.client("s3", region_name=source_region)
+    src = source_client or (boto3.client("s3", region_name=source_region) if source_bucket else None)
     stats = MediaSyncStats()
 
     for ref in refs:
@@ -681,7 +573,7 @@ def plant_dummy_media_refs(
                     continue
 
             content_seed: bytes | None = None
-            if uses_content_seed_dummy(key):
+            if uses_content_seed_placeholder(key):
                 content_seed = f"key:{key}".encode()
                 if src is not None and source_bucket:
                     try:
@@ -690,13 +582,12 @@ def plant_dummy_media_refs(
                     except ClientError as exc:
                         if exc.response.get("Error", {}).get("Code") not in {"404", "NoSuchKey", "NotFound"}:
                             raise
-                        # Keep key-based seed when the source object is gone.
 
             if dry_run:
-                stats.dummied += 1
+                stats.anonymised += 1
                 continue
 
-            spec = resolve_dummy_spec(ref, provider=provider, content_seed=content_seed)
+            spec = resolve_anonymise_spec(ref, provider=provider, content_seed=content_seed)
             private = ref.private if spec.private is None else bool(spec.private)
             acl = "private" if private else default_acl
             put_kwargs: dict[str, Any] = {
@@ -708,9 +599,9 @@ def plant_dummy_media_refs(
             if acl:
                 put_kwargs["ACL"] = acl
             dst.put_object(**put_kwargs)
-            stats.dummied += 1
+            stats.anonymised += 1
         except Exception:
             stats.errors += 1
-            logger.exception("Failed planting dummy media key %s", key)
+            logger.exception("Failed planting anonymised media key %s", key)
 
     return stats

@@ -54,13 +54,9 @@ def test_collect_extra_media_refs_dedupes(settings: SettingsWrapper) -> None:
 
 
 @pytest.mark.unit
-def test_normalized_label_set_and_anonymise_settings(settings: SettingsWrapper) -> None:
-    from mirroring.media import _normalized_label_set, anonymise_media_labels, iter_filefield_media_refs
+def test_anonymise_media_labels_from_settings(settings: SettingsWrapper) -> None:
+    from mirroring.media import anonymise_media_labels, iter_filefield_media_refs
 
-    assert _normalized_label_set([" Listing.Shipment ", "", "DATA_REPORTING.ExportedData"]) == {
-        "listing.shipment",
-        "data_reporting.exporteddata",
-    }
     settings.MIRRORING_ANONYMISE_MEDIA_FIELDS = [
         "listing.shipment",
         "ebay.ebaycoupondownload.raw_file",
@@ -73,14 +69,14 @@ def test_normalized_label_set_and_anonymise_settings(settings: SettingsWrapper) 
 
 
 @pytest.mark.unit
-def test_default_dummy_for_key_by_suffix() -> None:
-    from mirroring.media import default_dummy_for_key
+def test_default_anonymise_for_key_by_suffix() -> None:
+    from mirroring.media import default_anonymise_for_key
 
-    pdf = default_dummy_for_key("labels/dispatch/a.pdf", private=True)
+    pdf = default_anonymise_for_key("labels/dispatch/a.pdf", private=True)
     assert pdf.content_type == "application/pdf"
     assert pdf.body.startswith(b"%PDF")
     assert pdf.private is True
-    csv = default_dummy_for_key("exports/a.csv")
+    csv = default_anonymise_for_key("exports/a.csv")
     assert csv.content_type == "text/csv"
 
 
@@ -98,12 +94,12 @@ def test_identicon_png_is_deterministic_and_varies_by_seed() -> None:
 
 
 @pytest.mark.unit
-def test_image_dummy_uses_content_seed() -> None:
-    from mirroring.media import default_dummy_for_key
+def test_image_placeholder_uses_content_seed() -> None:
+    from mirroring.media import default_anonymise_for_key
 
-    by_key = default_dummy_for_key("photos/a.jpg")
-    by_etag = default_dummy_for_key("photos/a.jpg", content_seed=b"etag:111")
-    by_etag_same = default_dummy_for_key("photos/other.jpg", content_seed=b"etag:111")
+    by_key = default_anonymise_for_key("photos/a.jpg")
+    by_etag = default_anonymise_for_key("photos/a.jpg", content_seed=b"etag:111")
+    by_etag_same = default_anonymise_for_key("photos/other.jpg", content_seed=b"etag:111")
     assert by_key.content_type == "image/png"
     assert by_key.body != by_etag.body
     assert by_etag.body == by_etag_same.body
@@ -123,20 +119,20 @@ def test_placeholder_pdf_is_deterministic_and_varies_by_seed() -> None:
 
 
 @pytest.mark.unit
-def test_pdf_dummy_uses_content_seed() -> None:
-    from mirroring.media import default_dummy_for_key
+def test_pdf_placeholder_uses_content_seed() -> None:
+    from mirroring.media import default_anonymise_for_key
 
-    by_key = default_dummy_for_key("labels/dispatch/a.pdf")
-    by_etag = default_dummy_for_key("labels/dispatch/a.pdf", content_seed=b"etag:111")
-    by_etag_same = default_dummy_for_key("labels/return/b.pdf", content_seed=b"etag:111")
+    by_key = default_anonymise_for_key("labels/dispatch/a.pdf")
+    by_etag = default_anonymise_for_key("labels/dispatch/a.pdf", content_seed=b"etag:111")
+    by_etag_same = default_anonymise_for_key("labels/return/b.pdf", content_seed=b"etag:111")
     assert by_key.content_type == "application/pdf"
     assert by_key.body != by_etag.body
     assert by_etag.body == by_etag_same.body
 
 
 @pytest.mark.unit
-def test_plant_dummy_media_refs_put_object() -> None:
-    from mirroring.media import plant_dummy_media_refs
+def test_plant_anonymised_media_refs_put_object() -> None:
+    from mirroring.media import plant_anonymised_media_refs
 
     dst = MagicMock()
 
@@ -150,17 +146,16 @@ def test_plant_dummy_media_refs_put_object() -> None:
         MediaObjectRef("already.pdf", private=True, model_label="listing.shipment", field_name="dispatch_label_file"),
         MediaObjectRef("fresh.pdf", private=True, model_label="listing.shipment", field_name="dispatch_label_file"),
     ]
-    stats = plant_dummy_media_refs(
+    stats = plant_anonymised_media_refs(
         refs,
         dest_bucket="staging",
         dest_client=dst,
         skip_existing=True,
         dry_run=False,
-        images_from_source_hash=False,
     )
     assert stats.referenced == 2
     assert stats.skipped_existing == 1
-    assert stats.dummied == 1
+    assert stats.anonymised == 1
     dst.put_object.assert_called_once()
     assert dst.put_object.call_args.kwargs["Key"] == "fresh.pdf"
     assert dst.put_object.call_args.kwargs["ACL"] == "private"
@@ -169,15 +164,15 @@ def test_plant_dummy_media_refs_put_object() -> None:
 
 
 @pytest.mark.unit
-def test_plant_dummy_pdf_uses_source_etag_seed() -> None:
-    from mirroring.media import placeholder_pdf, plant_dummy_media_refs
+def test_plant_anonymised_pdf_uses_source_etag_seed() -> None:
+    from mirroring.media import placeholder_pdf, plant_anonymised_media_refs
 
     src = MagicMock()
     dst = MagicMock()
     dst.head_object.side_effect = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
     src.head_object.return_value = {"ETag": '"cafef00d"'}
 
-    stats = plant_dummy_media_refs(
+    stats = plant_anonymised_media_refs(
         [MediaObjectRef("labels/dispatch/x.pdf", private=True)],
         dest_bucket="staging",
         dest_client=dst,
@@ -185,24 +180,23 @@ def test_plant_dummy_pdf_uses_source_etag_seed() -> None:
         source_client=src,
         skip_existing=True,
         dry_run=False,
-        from_source_hash=True,
     )
-    assert stats.dummied == 1
+    assert stats.anonymised == 1
     body = dst.put_object.call_args.kwargs["Body"]
     assert body == placeholder_pdf(b"etag:cafef00d")
     assert dst.put_object.call_args.kwargs["ContentType"] == "application/pdf"
 
 
 @pytest.mark.unit
-def test_plant_dummy_image_uses_source_etag_seed() -> None:
-    from mirroring.media import identicon_png, plant_dummy_media_refs
+def test_plant_anonymised_image_uses_source_etag_seed() -> None:
+    from mirroring.media import identicon_png, plant_anonymised_media_refs
 
     src = MagicMock()
     dst = MagicMock()
     dst.head_object.side_effect = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
     src.head_object.return_value = {"ETag": '"deadbeef"'}
 
-    stats = plant_dummy_media_refs(
+    stats = plant_anonymised_media_refs(
         [MediaObjectRef("brand-images/x.jpg", private=False)],
         dest_bucket="staging",
         dest_client=dst,
@@ -210,9 +204,8 @@ def test_plant_dummy_image_uses_source_etag_seed() -> None:
         source_client=src,
         skip_existing=True,
         dry_run=False,
-        images_from_source_hash=True,
     )
-    assert stats.dummied == 1
+    assert stats.anonymised == 1
     body = dst.put_object.call_args.kwargs["Body"]
     assert body == identicon_png(b"etag:deadbeef")
     assert dst.put_object.call_args.kwargs["ContentType"] == "image/png"
@@ -287,12 +280,12 @@ def test_sync_referenced_media_dry_run(monkeypatch: MonkeyPatch, settings: Setti
 
     with (
         patch("mirroring.management.commands.sync_referenced_media.sync_media_refs_between_buckets") as sync_mock,
-        patch("mirroring.management.commands.sync_referenced_media.plant_dummy_media_refs") as dummy_mock,
-        patch("mirroring.management.commands.sync_referenced_media.collect_anonymised_media_refs") as collect_dummy,
+        patch("mirroring.management.commands.sync_referenced_media.plant_anonymised_media_refs") as plant_mock,
+        patch("mirroring.management.commands.sync_referenced_media.collect_anonymised_media_refs") as collect_mock,
     ):
         sync_mock.return_value = MediaSyncStats(referenced=2, copied=2)
-        dummy_mock.return_value = MediaSyncStats(referenced=0, dummied=0)
-        collect_dummy.return_value = []
+        plant_mock.return_value = MediaSyncStats(referenced=0, anonymised=0)
+        collect_mock.return_value = []
         out = StringIO()
         call_command("sync_referenced_media", "--dry-run", stdout=out)
 
@@ -300,5 +293,5 @@ def test_sync_referenced_media_dry_run(monkeypatch: MonkeyPatch, settings: Setti
     assert sync_mock.call_args.kwargs["dry_run"] is True
     assert sync_mock.call_args.kwargs["source_bucket"] == "prod-bucket"
     assert sync_mock.call_args.kwargs["dest_bucket"] == "staging-bucket"
-    assert dummy_mock.called
+    assert plant_mock.called
     assert "Dry run complete" in out.getvalue()
