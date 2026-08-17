@@ -38,6 +38,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: none
+      id-token: write
       actions: read
     environment: pypi
     steps:
@@ -45,10 +46,9 @@ jobs:
         with:
           name: python-package-distributions
           path: dist/
+      # Trusted publishing (OIDC) — do not pass password/username or the action
+      # falls back to API-token auth and skips attestations.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: dist/
-          password: ${{ secrets.PYPI_PUBLISH_TOKEN }}
-          # API-token auth does not support Trusted Publishing attestations.
-          attestations: false
           print-hash: true

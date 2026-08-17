@@ -47,12 +47,21 @@ On every push and pull request, GitHub Actions:
 - Runs lowest- and highest-dependency isolated jobs
 - Runs a Python 3.12–3.14 compatibility matrix
 
-Creating a GitHub release publishes to PyPI via the `Publish to PyPI` workflow.
-Configure a GitHub Actions environment named `pypi` with an environment secret:
+Creating a GitHub release publishes to PyPI via [trusted publishing](https://docs.pypi.org/trusted-publishers/)
+(OIDC — no long-lived API token required). Configure:
 
-| Secret | Value |
-|--------|-------|
-| `PYPI_PUBLISH_TOKEN` | A PyPI API token (`pypi-…`), ideally scoped to the `django-mirroring` project |
+1. A GitHub Actions environment named `pypi` on this repository
+2. A trusted publisher on PyPI for project `django-mirroring`:
+
+| Field | Value |
+|-------|-------|
+| Owner | `ababic` |
+| Repository | `django-mirroring` |
+| Workflow | `publish.yml` |
+| Environment | `pypi` |
+
+Optional: keep a project-scoped `PYPI_PUBLISH_TOKEN` environment secret as an
+emergency fallback only — the workflow does not use it by default.
 
 ## Code review
 
@@ -67,4 +76,4 @@ On `main`:
 2. Update [CHANGELOG.md](CHANGELOG.md).
 3. Commit, tag, and push (`git tag -a v0.2.0 -m "Release v0.2.0" && git push --tags`).
 4. Create a GitHub release from the tag so the publish workflow can run
-   (`pypi` environment secret `PYPI_PUBLISH_TOKEN` must be set — see above).
+   (PyPI trusted publisher must match the table above).
