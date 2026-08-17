@@ -1,0 +1,55 @@
+# Keep 120 to match the Reskinned Inventory host conventions this package
+# was extracted from. The upstream cookiecutter template defaults to 88.
+line-length = 120
+extend-exclude = ["LC_MESSAGES", "locale"]
+
+[lint]
+select = [
+    "B",
+    "C4",
+    "DJ",
+    "E",
+    "F",
+    "I",
+    "RUF100",
+    "S",
+    "UP",
+    "W",
+]
+fixable = ["C4", "E", "F", "I", "UP"]
+ignore = [
+    "E501",
+    "DJ008",
+]
+
+[lint.isort]
+known-first-party = ["mirroring"]
+lines-after-imports = 2
+lines-between-types = 1
+
+[lint.per-file-ignores]
+"tests/**/*.py" = [
+    "S101",
+    "S105",
+    "S106",
+    "ARG",
+    "FBT",
+    "PLR2004",
+    "S311",
+]
+"src/mirroring/test/**/*.py" = [
+    "S105",
+]
+"src/mirroring/management/**/*.py" = [
+    # Commands intentionally shell out to pinned pg_dump/psql/dumpling binaries
+    # and apply a fixed sanitized password hash after restore.
+    "S105",
+    "S603",
+    "S608",
+]
+"src/mirroring/versions.py" = [
+    "S603",
+]
+
+[format]
+docstring-code-format = true

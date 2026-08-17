@@ -4,18 +4,27 @@ Django add-on for production database mirror refresh and staging restore. Uses
 [Dumpling](https://github.com/ababic/dumpling) for in-stream anonymisation and
 Postgres shadow-database cutover so consumers never see a half-loaded mirror.
 
+## Links
+
+- [Changelog](CHANGELOG.md)
+- [Contributing](CONTRIBUTING.md)
+- [Security](SECURITY.md)
+- [Issues](https://github.com/ababic/django-mirroring/issues)
+
+## Supported versions
+
+This package supports **Django 6.0** and **Python 3.12+**. Dependencies are
+compatible-release pinned; see [Pinned dependencies](#pinned-dependencies).
+
 ## Installation
 
-From GitHub:
+Pick the command for your preferred package installer:
 
 ```bash
-pip install git+https://github.com/ababic/django-mirroring.git
-```
-
-From PyPI (when published):
-
-```bash
+uv add django-mirroring
 pip install django-mirroring
+# or from GitHub while unpublished:
+pip install git+https://github.com/ababic/django-mirroring.git
 ```
 
 Add `"mirroring"` to `INSTALLED_APPS` and run migrations:
@@ -158,9 +167,9 @@ bytes.
 ```python
 # settings.py
 MIRRORING_ANONYMISE_MEDIA_FIELDS = [
-    "listing.shipment",                 # dispatch/return labels + courier XML
-    "ebay.ebaycoupondownload",          # coupon transaction CSVs
-    "data_reporting.exporteddata",      # admin exports
+    "listing.shipment",  # dispatch/return labels + courier XML
+    "ebay.ebaycoupondownload",  # coupon transaction CSVs
+    "data_reporting.exporteddata",  # admin exports
     # or field-level: "reskinned_inventory.picture.preview",
 ]
 # Optional override; return None to fall back to suffix defaults:
@@ -179,13 +188,10 @@ to your project's admin site (for example `"core.admin.site"`) or call
 ## Development
 
 ```bash
-just create-venv
-source .venv/bin/activate
-just install-requirements
+just install
+just test
+just lint
+just coverage
 ```
 
-Run the package tests from a host Django project that installs this package, e.g.:
-
-```bash
-pytest --pyargs mirroring.tests
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full recipe list and release process.

@@ -1,15 +1,19 @@
-[build-system]
-requires = ["setuptools>=70.0.0"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "django-mirroring"
-version = "0.1.9"
-authors = [{name = "Andy Babic", email = "andy@wearecrew.com"}]
+version = "0.2.0"
+description = "Django add-on for production database mirror refresh and staging restore (Dumpling + Postgres shadow cutover)"
 readme = "README.md"
-license = {file = "LICENSE"}
+license = "MIT"
+authors = [{name = "Andy Babic", email = "andy@wearecrew.com"}]
 classifiers = [
-    "License :: OSI Approved :: MIT License",
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Framework :: Django",
     "Framework :: Django :: 6.0",
 ]
@@ -21,13 +25,38 @@ dependencies = [
     "dumpling-cli~=0.9.0",
     "boto3~=1.42.0",
 ]
-description = "Django add-on for production database mirror refresh and staging restore (Dumpling + Postgres shadow cutover)"
 
 [project.urls]
-Home = "https://github.com/ababic/django-mirroring"
+Homepage = "https://github.com/ababic/django-mirroring"
+Repository = "https://github.com/ababic/django-mirroring"
+Changelog = "https://github.com/ababic/django-mirroring/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/ababic/django-mirroring#readme"
+Issues = "https://github.com/ababic/django-mirroring/issues"
 
-[tool.setuptools.packages.find]
-include = ["mirroring*"]
+[dependency-groups]
+dev = [
+    "pytest>=8.1.1",
+    "pytest-cov>=7.1.0",
+    "pytest-django>=4.12.0",
+    "ruff>=0.15.9",
+]
 
-[tool.setuptools.package-data]
-mirroring = ["py.typed"]
+[build-system]
+requires = ["uv_build>=0.11.19,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "mirroring"
+source-exclude = [
+    "mirroring/test",
+    ".*",
+]
+
+[tool.pytest.ini_options]
+DJANGO_SETTINGS_MODULE = "mirroring.test.settings"
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+    "unit: fast isolated tests",
+    "django_db: requires database access",
+]
