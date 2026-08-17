@@ -105,6 +105,31 @@ def test_image_dummy_uses_content_seed() -> None:
 
 
 @pytest.mark.unit
+def test_placeholder_pdf_is_deterministic_and_varies_by_seed() -> None:
+    from mirroring.media import placeholder_pdf
+
+    a = placeholder_pdf(b"etag:abc")
+    b = placeholder_pdf(b"etag:abc")
+    c = placeholder_pdf(b"etag:xyz")
+    assert a.startswith(b"%PDF")
+    assert a == b
+    assert a != c
+    assert b"REDACTED PLACEHOLDER" in a
+
+
+@pytest.mark.unit
+def test_pdf_dummy_uses_content_seed() -> None:
+    from mirroring.media import default_dummy_for_key
+
+    by_key = default_dummy_for_key("labels/dispatch/a.pdf")
+    by_etag = default_dummy_for_key("labels/dispatch/a.pdf", content_seed=b"etag:111")
+    by_etag_same = default_dummy_for_key("labels/return/b.pdf", content_seed=b"etag:111")
+    assert by_key.content_type == "application/pdf"
+    assert by_key.body != by_etag.body
+    assert by_etag.body == by_etag_same.body
+
+
+@pytest.mark.unit
 def test_plant_dummy_media_refs_put_object() -> None:
     from mirroring.media import plant_dummy_media_refs
 
@@ -135,6 +160,32 @@ def test_plant_dummy_media_refs_put_object() -> None:
     assert dst.put_object.call_args.kwargs["Key"] == "fresh.pdf"
     assert dst.put_object.call_args.kwargs["ACL"] == "private"
     assert dst.put_object.call_args.kwargs["Body"].startswith(b"%PDF")
+    assert b"REDACTED PLACEHOLDER" in dst.put_object.call_args.kwargs["Body"]
+
+
+@pytest.mark.unit
+def test_plant_dummy_pdf_uses_source_etag_seed() -> None:
+    from mirroring.media import placeholder_pdf, plant_dummy_media_refs
+
+    src = MagicMock()
+    dst = MagicMock()
+    dst.head_object.side_effect = ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")
+    src.head_object.return_value = {"ETag": '"cafef00d"'}
+
+    stats = plant_dummy_media_refs(
+        [MediaObjectRef("labels/dispatch/x.pdf", private=True)],
+        dest_bucket="staging",
+        dest_client=dst,
+        source_bucket="prod",
+        source_client=src,
+        skip_existing=True,
+        dry_run=False,
+        from_source_hash=True,
+    )
+    assert stats.dummied == 1
+    body = dst.put_object.call_args.kwargs["Body"]
+    assert body == placeholder_pdf(b"etag:cafef00d")
+    assert dst.put_object.call_args.kwargs["ContentType"] == "application/pdf"
 
 
 @pytest.mark.unit

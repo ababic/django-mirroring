@@ -38,6 +38,7 @@ _MINIMAL_XML = b'<?xml version="1.0" encoding="UTF-8"?><redacted/>\n'
 _MINIMAL_TEXT = b"redacted\n"
 _MINIMAL_BIN = b"redacted\n"
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
+_CONTENT_SEED_SUFFIXES = _IMAGE_SUFFIXES | {".pdf"}
 _IDENTICON_SIZE = 128
 _IDENTICON_CELLS = 5
 
@@ -303,6 +304,11 @@ def is_image_media_key(key: str) -> bool:
     return PurePosixPath(key).suffix.lower() in _IMAGE_SUFFIXES
 
 
+def uses_content_seed_dummy(key: str) -> bool:
+    """True when placeholders should vary by source content hash (images + PDFs)."""
+    return PurePosixPath(key).suffix.lower() in _CONTENT_SEED_SUFFIXES
+
+
 def _png_chunk(tag: bytes, data: bytes) -> bytes:
     crc = zlib.crc32(tag + data) & 0xFFFFFFFF
     return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
@@ -356,6 +362,55 @@ def identicon_png(
     return encode_rgb_png(pixel, pixel, rows)
 
 
+def placeholder_pdf(seed: bytes) -> bytes:
+    """Deterministic one-page PDF with hash-coloured banner (no ReportLab dependency)."""
+    digest = hashlib.sha256(seed).digest()
+    r, g, b = (c / 255.0 for c in digest[:3])
+    label = digest[:8].hex().upper()
+    # Letter page; coloured header bar + label so admins can tell placeholders apart.
+    stream = (
+        "q\n"
+        f"{r:.4f} {g:.4f} {b:.4f} rg\n"
+        "0 692 612 100 re f\n"
+        "1 1 1 rg\n"
+        "BT /F1 22 Tf 72 742 Td (REDACTED PLACEHOLDER) Tj ET\n"
+        f"BT /F1 12 Tf 72 718 Td ({label}) Tj ET\n"
+        "Q\n"
+    ).encode("latin-1")
+
+    objects = [
+        b"1 0 obj<< /Type /Catalog /Pages 2 0 R >>endobj\n",
+        b"2 0 obj<< /Type /Pages /Kids [3 0 R] /Count 1 >>endobj\n",
+        (
+            b"3 0 obj<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] "
+            b"/Contents 4 0 R /Resources<< /Font<< /F1 5 0 R >> >> >>endobj\n"
+        ),
+        (
+            b"4 0 obj<< /Length "
+            + str(len(stream)).encode("ascii")
+            + b" >>stream\n"
+            + stream
+            + b"\nendstream\nendobj\n"
+        ),
+        b"5 0 obj<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>endobj\n",
+    ]
+
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for obj in objects:
+        offsets.append(len(out))
+        out.extend(obj)
+    xref_pos = len(out)
+    out.extend(f"xref\n0 {len(offsets)}\n".encode())
+    out.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        out.extend(f"{offset:010d} 00000 n \n".encode())
+    out.extend(
+        f"trailer<< /Size {len(offsets)} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode()
+    )
+    return bytes(out)
+
+
 def content_seed_from_s3_head(head: dict[str, Any], *, fallback_key: str) -> bytes:
     """Prefer S3 ETag (content fingerprint) as seed; fall back to the object key."""
     etag = str(head.get("ETag") or "").strip().strip('"')
@@ -372,12 +427,14 @@ def default_dummy_for_key(
 ) -> MediaDummySpec:
     """Built-in placeholder body chosen from the object key's suffix.
 
-    Image keys get a visual identicon. Pass ``content_seed`` (e.g. from the source
-    object's ETag) so placeholders vary with original content rather than only the path.
+    Image keys get a visual identicon; PDFs get a coloured one-page placeholder.
+    Pass ``content_seed`` (e.g. from the source object's ETag) so placeholders
+    vary with original content rather than only the path.
     """
     suffix = PurePosixPath(key).suffix.lower()
+    seed = content_seed if content_seed is not None else f"key:{key}".encode()
     if suffix == ".pdf":
-        return MediaDummySpec(body=_MINIMAL_PDF, content_type="application/pdf", private=private)
+        return MediaDummySpec(body=placeholder_pdf(seed), content_type="application/pdf", private=private)
     if suffix == ".csv":
         return MediaDummySpec(body=_MINIMAL_CSV, content_type="text/csv", private=private)
     if suffix in {".xml", ".xsl", ".xslt"}:
@@ -386,7 +443,6 @@ def default_dummy_for_key(
         content_type = "application/json" if suffix == ".json" else "text/plain"
         return MediaDummySpec(body=_MINIMAL_TEXT, content_type=content_type, private=private)
     if is_image_media_key(key):
-        seed = content_seed if content_seed is not None else f"key:{key}".encode()
         return MediaDummySpec(body=identicon_png(seed), content_type="image/png", private=private)
     return MediaDummySpec(body=_MINIMAL_BIN, content_type="application/octet-stream", private=private)
 
@@ -491,6 +547,7 @@ def plant_dummy_media_refs(
     limit: int | None = None,
     default_acl: str = "public-read",
     provider: DummyProvider | None = None,
+    from_source_hash: bool | None = None,
     images_from_source_hash: bool | None = None,
 ) -> MediaSyncStats:
     """Put placeholder objects at ``refs`` keys on ``dest_bucket``.
@@ -498,22 +555,32 @@ def plant_dummy_media_refs(
     Pass ``provider`` (e.g. ``load_dummy_provider()``) to honour host overrides;
     ``None`` uses suffix defaults.
 
-    For image keys, when ``images_from_source_hash`` is true (default) and
-    ``source_bucket`` is set, the source object's ETag seeds a visual identicon so
-    placeholders differ by original content without copying the real bytes. If the
-    source object is missing, the key path is used as the seed instead.
+    For image and PDF keys, when ``from_source_hash`` is true (default) and
+    ``source_bucket`` is set, the source object's ETag seeds a visual placeholder
+    so files differ by original content without copying real bytes. If the source
+    object is missing, the key path is used as the seed instead.
+
+    ``images_from_source_hash`` is retained as an alias of ``from_source_hash``.
     """
     import boto3
     from botocore.exceptions import ClientError
 
-    if images_from_source_hash is None:
-        images_from_source_hash = True
+    if from_source_hash is None:
+        from_source_hash = images_from_source_hash
+    if from_source_hash is None:
+        from_source_hash = True
         if settings.configured:
-            images_from_source_hash = bool(getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True))
+            from_source_hash = bool(
+                getattr(
+                    settings,
+                    "MEDIA_SYNC_DUMMY_FROM_SOURCE_HASH",
+                    getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True),
+                )
+            )
 
     dst = dest_client or boto3.client("s3", region_name=dest_region)
     src = None
-    if images_from_source_hash and source_bucket:
+    if from_source_hash and source_bucket:
         src = source_client or boto3.client("s3", region_name=source_region)
     stats = MediaSyncStats()
 
@@ -534,7 +601,7 @@ def plant_dummy_media_refs(
                     continue
 
             content_seed: bytes | None = None
-            if is_image_media_key(key):
+            if uses_content_seed_dummy(key):
                 content_seed = f"key:{key}".encode()
                 if src is not None and source_bucket:
                     try:
