@@ -5,9 +5,10 @@ points at storage keys, but staging uses a separate bucket from production. Sync
 only keys that appear in FileField / ImageField columns (plus optional host
 collectors), not the whole prod bucket.
 
-PII-bearing fields can be skipped (``MEDIA_SYNC_EXCLUDE_*``) and optionally replaced
-with harmless dummy objects at the same keys (``MEDIA_SYNC_DUMMY_*``) so non-nullable
-or UI-linked paths still resolve without copying real customer content.
+PII-bearing fields can be anonymised via ``MIRRORING_ANONYMISE_MEDIA_FIELDS``:
+those keys are not copied from production; instead harmless placeholders are
+planted at the same destination keys (image/PDF placeholders seeded from the
+source ETag when available).
 """
 
 from __future__ import annotations
@@ -32,7 +33,6 @@ logger = logging.getLogger(__name__)
 ExtraCollector = Callable[[], Iterable[str]]
 DummyProvider = Callable[["MediaObjectRef"], "MediaDummySpec | None"]
 
-_MINIMAL_PDF = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 _MINIMAL_CSV = b"redacted\n"
 _MINIMAL_XML = b'<?xml version="1.0" encoding="UTF-8"?><redacted/>\n'
 _MINIMAL_TEXT = b"redacted\n"
@@ -94,32 +94,73 @@ def _normalized_label_set(values: Iterable[str] | None) -> set[str]:
     return {str(value).strip().lower() for value in (values or []) if str(value).strip()}
 
 
+def parse_anonymise_media_labels(values: Iterable[str] | None) -> tuple[set[str], set[str]]:
+    """Split ``app.model`` / ``app.model.field`` labels into (models, fields)."""
+    models: set[str] = set()
+    fields: set[str] = set()
+    for raw in values or []:
+        label = str(raw).strip().lower()
+        if not label:
+            continue
+        parts = label.split(".")
+        if len(parts) == 2:
+            models.add(label)
+        elif len(parts) >= 3:
+            fields.add(".".join(parts[:3]))
+        else:
+            raise ValueError(
+                f"Invalid MIRRORING_ANONYMISE_MEDIA_FIELDS entry {raw!r}; "
+                "expected app_label.model or app_label.model.field"
+            )
+    return models, fields
+
+
+def anonymise_media_labels(
+    values: Iterable[str] | None = None,
+) -> tuple[set[str], set[str]]:
+    """Return (model_labels, field_labels) for media that must not be copied as-is.
+
+    Primary setting: ``MIRRORING_ANONYMISE_MEDIA_FIELDS``.
+
+    Legacy fallback (when the primary setting is unset/empty): union of
+    ``MEDIA_SYNC_DUMMY_*`` and ``MEDIA_SYNC_EXCLUDE_*``.
+    """
+    if values is not None:
+        return parse_anonymise_media_labels(values)
+
+    configured = getattr(settings, "MIRRORING_ANONYMISE_MEDIA_FIELDS", None)
+    if configured:
+        return parse_anonymise_media_labels(configured)
+
+    models = _normalized_label_set(getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)) | _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
+    )
+    fields = _normalized_label_set(getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)) | _normalized_label_set(
+        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
+    )
+    return models, fields
+
+
 def sync_exclude_model_labels(
     exclude_models: set[str] | None = None,
     dummy_models: set[str] | None = None,
 ) -> set[str]:
-    """Models omitted from real CopyObject sync (explicit excludes ∪ dummy targets)."""
-    excluded = exclude_models if exclude_models is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None)
-    )
-    dummies = dummy_models if dummy_models is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)
-    )
-    return excluded | dummies
+    """Deprecated alias — prefer ``anonymise_media_labels()``."""
+    if exclude_models is not None or dummy_models is not None:
+        return (exclude_models or set()) | (dummy_models or set())
+    models, _fields = anonymise_media_labels()
+    return models
 
 
 def sync_exclude_field_labels(
     exclude_fields: set[str] | None = None,
     dummy_fields: set[str] | None = None,
 ) -> set[str]:
-    """Fields omitted from real CopyObject sync (explicit excludes ∪ dummy targets)."""
-    excluded = exclude_fields if exclude_fields is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None)
-    )
-    dummies = dummy_fields if dummy_fields is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)
-    )
-    return excluded | dummies
+    """Deprecated alias — prefer ``anonymise_media_labels()``."""
+    if exclude_fields is not None or dummy_fields is not None:
+        return (exclude_fields or set()) | (dummy_fields or set())
+    _models, fields = anonymise_media_labels()
+    return fields
 
 
 def _iter_concrete_filefield_models() -> Iterator[tuple[Any, str, list[Any]]]:
@@ -132,47 +173,57 @@ def _iter_concrete_filefield_models() -> Iterator[tuple[Any, str, list[Any]]]:
 
 def iter_filefield_media_refs(
     *,
+    anonymise_models: set[str] | None = None,
+    anonymise_fields: set[str] | None = None,
     exclude_models: set[str] | None = None,
     exclude_fields: set[str] | None = None,
     dummy_models: set[str] | None = None,
     dummy_fields: set[str] | None = None,
+    only_anonymise: bool = False,
     only_dummy: bool = False,
 ) -> Iterator[MediaObjectRef]:
     """Yield distinct media refs from concrete FileField / ImageField columns.
 
-    When ``only_dummy`` is false (default), yields refs for sync — skipping models /
-    fields in ``MEDIA_SYNC_EXCLUDE_*`` and ``MEDIA_SYNC_DUMMY_*``.
+    When ``only_anonymise`` is false (default), yields refs for sync — skipping
+    models/fields listed in ``MIRRORING_ANONYMISE_MEDIA_FIELDS``.
 
-    When ``only_dummy`` is true, yields only refs matching ``MEDIA_SYNC_DUMMY_MODELS``
-    / ``MEDIA_SYNC_DUMMY_FIELDS`` (for placeholder planting).
+    When ``only_anonymise`` is true, yields only anonymised targets (for
+    placeholder planting).
+
+    ``only_dummy`` / ``exclude_*`` / ``dummy_*`` remain as compatibility aliases.
     """
-    dummy_model_set = dummy_models if dummy_models is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None)
-    )
-    dummy_field_set = dummy_fields if dummy_fields is not None else _normalized_label_set(
-        getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None)
-    )
-    if only_dummy:
-        skip_models = set()
-        skip_fields = set()
+    only_anonymise = only_anonymise or only_dummy
+    if anonymise_models is None and anonymise_fields is None:
+        if any(v is not None for v in (exclude_models, exclude_fields, dummy_models, dummy_fields)):
+            anonymise_models = (exclude_models or set()) | (dummy_models or set())
+            anonymise_fields = (exclude_fields or set()) | (dummy_fields or set())
+        else:
+            anonymise_models, anonymise_fields = anonymise_media_labels()
     else:
-        skip_models = sync_exclude_model_labels(exclude_models, dummy_model_set)
-        skip_fields = sync_exclude_field_labels(exclude_fields, dummy_field_set)
+        anonymise_models = anonymise_models or set()
+        anonymise_fields = anonymise_fields or set()
+
+    if only_anonymise:
+        skip_models: set[str] = set()
+        skip_fields: set[str] = set()
+    else:
+        skip_models = anonymise_models
+        skip_fields = anonymise_fields
 
     seen: set[str] = set()
     for model, label, all_file_fields in _iter_concrete_filefield_models():
         if label in skip_models:
             continue
-        if only_dummy and label not in dummy_model_set and not any(
-            f"{label}.{field.name.lower()}" in dummy_field_set for field in all_file_fields
+        if only_anonymise and label not in anonymise_models and not any(
+            f"{label}.{field.name.lower()}" in anonymise_fields for field in all_file_fields
         ):
             continue
 
         selected_fields = []
         for field in all_file_fields:
             field_label = f"{label}.{field.name.lower()}"
-            if only_dummy:
-                if label in dummy_model_set or field_label in dummy_field_set:
+            if only_anonymise:
+                if label in anonymise_models or field_label in anonymise_fields:
                     selected_fields.append(field)
             elif field_label not in skip_fields:
                 selected_fields.append(field)
@@ -217,13 +268,21 @@ def load_extra_collectors(dotted_paths: Iterable[str] | None = None) -> list[Ext
 
 
 def load_dummy_provider(dotted_path: str | None = None) -> DummyProvider | None:
-    """Import optional ``MEDIA_SYNC_DUMMY_PROVIDER`` callable."""
-    path = dotted_path if dotted_path is not None else getattr(settings, "MEDIA_SYNC_DUMMY_PROVIDER", None)
+    """Import optional anonymise provider callable.
+
+    Prefers ``MIRRORING_ANONYMISE_MEDIA_PROVIDER``, then legacy
+    ``MEDIA_SYNC_DUMMY_PROVIDER``.
+    """
+    path = dotted_path
+    if path is None:
+        path = getattr(settings, "MIRRORING_ANONYMISE_MEDIA_PROVIDER", None) or getattr(
+            settings, "MEDIA_SYNC_DUMMY_PROVIDER", None
+        )
     if not path:
         return None
     module_path, _, attr = str(path).rpartition(".")
     if not module_path or not attr:
-        raise ValueError(f"Invalid MEDIA_SYNC_DUMMY_PROVIDER: {path!r}")
+        raise ValueError(f"Invalid anonymise media provider: {path!r}")
     module = import_module(module_path)
     provider = getattr(module, attr)
     if not callable(provider):
@@ -253,6 +312,8 @@ def collect_referenced_media_refs(
     *,
     include_filefields: bool = True,
     extra_collectors: Iterable[ExtraCollector] | None = None,
+    anonymise_models: set[str] | None = None,
+    anonymise_fields: set[str] | None = None,
     exclude_models: set[str] | None = None,
     exclude_fields: set[str] | None = None,
     dummy_models: set[str] | None = None,
@@ -265,11 +326,13 @@ def collect_referenced_media_refs(
     if include_filefields:
         streams.append(
             iter_filefield_media_refs(
+                anonymise_models=anonymise_models,
+                anonymise_fields=anonymise_fields,
                 exclude_models=exclude_models,
                 exclude_fields=exclude_fields,
                 dummy_models=dummy_models,
                 dummy_fields=dummy_fields,
-                only_dummy=False,
+                only_anonymise=False,
             )
         )
     streams.append(iter_extra_media_refs(extra_collectors))
@@ -283,21 +346,33 @@ def collect_referenced_media_refs(
     return refs
 
 
+def collect_anonymised_media_refs(
+    *,
+    anonymise_models: set[str] | None = None,
+    anonymise_fields: set[str] | None = None,
+) -> list[MediaObjectRef]:
+    """Return deduped refs that should receive anonymised placeholder objects."""
+    refs = list(
+        iter_filefield_media_refs(
+            anonymise_models=anonymise_models,
+            anonymise_fields=anonymise_fields,
+            only_anonymise=True,
+        )
+    )
+    refs.sort(key=lambda item: item.key)
+    return refs
+
+
 def collect_dummy_media_refs(
     *,
     dummy_models: set[str] | None = None,
     dummy_fields: set[str] | None = None,
 ) -> list[MediaObjectRef]:
-    """Return deduped refs that should receive placeholder objects (not prod copies)."""
-    refs = list(
-        iter_filefield_media_refs(
-            dummy_models=dummy_models,
-            dummy_fields=dummy_fields,
-            only_dummy=True,
-        )
+    """Deprecated alias for ``collect_anonymised_media_refs``."""
+    return collect_anonymised_media_refs(
+        anonymise_models=dummy_models,
+        anonymise_fields=dummy_fields,
     )
-    refs.sort(key=lambda item: item.key)
-    return refs
 
 
 def is_image_media_key(key: str) -> bool:
@@ -568,13 +643,18 @@ def plant_dummy_media_refs(
     if from_source_hash is None:
         from_source_hash = images_from_source_hash
     if from_source_hash is None:
+        # Always on for anonymised image/PDF placeholders unless explicitly disabled.
         from_source_hash = True
         if settings.configured:
             from_source_hash = bool(
                 getattr(
                     settings,
-                    "MEDIA_SYNC_DUMMY_FROM_SOURCE_HASH",
-                    getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True),
+                    "MIRRORING_ANONYMISE_MEDIA_FROM_SOURCE_HASH",
+                    getattr(
+                        settings,
+                        "MEDIA_SYNC_DUMMY_FROM_SOURCE_HASH",
+                        getattr(settings, "MEDIA_SYNC_DUMMY_IMAGES_FROM_SOURCE_HASH", True),
+                    ),
                 )
             )
 

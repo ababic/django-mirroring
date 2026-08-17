@@ -54,15 +54,20 @@ def test_collect_extra_media_refs_dedupes(settings: SettingsWrapper) -> None:
 
 
 @pytest.mark.unit
-def test_normalized_label_set_and_exclude_settings(settings: SettingsWrapper) -> None:
-    from mirroring.media import _normalized_label_set, iter_filefield_media_refs
+def test_normalized_label_set_and_anonymise_settings(settings: SettingsWrapper) -> None:
+    from mirroring.media import _normalized_label_set, anonymise_media_labels, iter_filefield_media_refs
 
     assert _normalized_label_set([" Listing.Shipment ", "", "DATA_REPORTING.ExportedData"]) == {
         "listing.shipment",
         "data_reporting.exporteddata",
     }
-    settings.MEDIA_SYNC_EXCLUDE_MODELS = ["auth.user"]
-    settings.MEDIA_SYNC_EXCLUDE_FIELDS = ["auth.permission.codename"]
+    settings.MIRRORING_ANONYMISE_MEDIA_FIELDS = [
+        "listing.shipment",
+        "ebay.ebaycoupondownload.raw_file",
+    ]
+    models, fields = anonymise_media_labels()
+    assert models == {"listing.shipment"}
+    assert fields == {"ebay.ebaycoupondownload.raw_file"}
     # Smoke: settings parse and do not raise when scanning installed models.
     list(iter_filefield_media_refs())
 
@@ -283,7 +288,7 @@ def test_sync_referenced_media_dry_run(monkeypatch: MonkeyPatch, settings: Setti
     with (
         patch("mirroring.management.commands.sync_referenced_media.sync_media_refs_between_buckets") as sync_mock,
         patch("mirroring.management.commands.sync_referenced_media.plant_dummy_media_refs") as dummy_mock,
-        patch("mirroring.management.commands.sync_referenced_media.collect_dummy_media_refs") as collect_dummy,
+        patch("mirroring.management.commands.sync_referenced_media.collect_anonymised_media_refs") as collect_dummy,
     ):
         sync_mock.return_value = MediaSyncStats(referenced=2, copied=2)
         dummy_mock.return_value = MediaSyncStats(referenced=0, dummied=0)

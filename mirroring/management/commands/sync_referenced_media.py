@@ -5,10 +5,9 @@ media bucket from production. Only keys referenced by FileField / ImageField
 columns (plus optional ``MEDIA_SYNC_EXTRA_COLLECTORS``) are copied — not a full
 bucket sync.
 
-PII-bearing models/fields listed in ``MEDIA_SYNC_EXCLUDE_*`` are skipped.
-``MEDIA_SYNC_DUMMY_*`` targets are also skipped for CopyObject, then receive
-harmless placeholder objects at the same keys (so non-nullable / UI-linked paths
-still resolve).
+Models/fields in ``MIRRORING_ANONYMISE_MEDIA_FIELDS`` are not copied from
+production; harmless placeholders are planted at the same keys instead
+(image/PDF placeholders seeded from the source ETag when available).
 
 Endpoints::
 
@@ -37,7 +36,8 @@ from django.core.management.base import CommandError
 
 from mirroring.base import BaseMirroringCommand
 from mirroring.media import (
-    collect_dummy_media_refs,
+    anonymise_media_labels,
+    collect_anonymised_media_refs,
     collect_referenced_media_refs,
     load_dummy_provider,
     plant_dummy_media_refs,
@@ -64,7 +64,7 @@ class Command(BaseMirroringCommand):
         parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Collect keys and count would-copy / would-dummy / missing / existing; write nothing.",
+            help="Collect keys and count would-copy / would-anonymise / missing / existing; write nothing.",
         )
         parser.add_argument(
             "--skip-existing",
@@ -132,26 +132,18 @@ class Command(BaseMirroringCommand):
         if dry_run:
             self.warning("Dry run — no objects will be written.")
 
-        exclude_models = getattr(settings, "MEDIA_SYNC_EXCLUDE_MODELS", None) or []
-        exclude_fields = getattr(settings, "MEDIA_SYNC_EXCLUDE_FIELDS", None) or []
-        dummy_models = getattr(settings, "MEDIA_SYNC_DUMMY_MODELS", None) or []
-        dummy_fields = getattr(settings, "MEDIA_SYNC_DUMMY_FIELDS", None) or []
-        if exclude_models:
-            self.info(f"Exclude models: {', '.join(exclude_models)}")
-        if exclude_fields:
-            self.info(f"Exclude fields: {', '.join(exclude_fields)}")
-        if dummy_models:
-            self.info(f"Dummy models: {', '.join(dummy_models)}")
-        if dummy_fields:
-            self.info(f"Dummy fields: {', '.join(dummy_fields)}")
+        anonymise_models, anonymise_fields = anonymise_media_labels()
+        anonymise_entries = sorted(anonymise_models | anonymise_fields)
+        if anonymise_entries:
+            self.info(f"Anonymise media: {', '.join(anonymise_entries)}")
 
         self.info("Collecting referenced media keys from the database…")
         refs = collect_referenced_media_refs()
         self.info(f"Found {len(refs):,} distinct key(s) to copy from source.")
 
-        dummy_refs = collect_dummy_media_refs()
-        if dummy_refs:
-            self.info(f"Found {len(dummy_refs):,} distinct key(s) to replace with dummies.")
+        anonymised_refs = collect_anonymised_media_refs()
+        if anonymised_refs:
+            self.info(f"Found {len(anonymised_refs):,} distinct key(s) to anonymise with placeholders.")
 
         limit = options["limit"] or None
         default_acl = getattr(settings, "AWS_DEFAULT_ACL", "public-read") or "public-read"
@@ -169,7 +161,7 @@ class Command(BaseMirroringCommand):
             default_acl=default_acl,
         )
         dummy_stats = plant_dummy_media_refs(
-            dummy_refs,
+            anonymised_refs,
             dest_bucket=dest_bucket,
             dest_region=dest_region,
             source_bucket=source_bucket,
@@ -191,12 +183,12 @@ class Command(BaseMirroringCommand):
         if stats.errors:
             self.error(f"Copy — errors: {stats.errors:,}")
 
-        self.info(f"Dummy — referenced: {dummy_stats.referenced:,}")
+        self.info(f"Anonymise — referenced: {dummy_stats.referenced:,}")
         dverb = "Would plant" if dry_run else "Planted"
-        self.info(f"Dummy — {dverb.lower()}: {dummy_stats.dummied:,}")
-        self.info(f"Dummy — skipped (existing): {dummy_stats.skipped_existing:,}")
+        self.info(f"Anonymise — {dverb.lower()}: {dummy_stats.dummied:,}")
+        self.info(f"Anonymise — skipped (existing): {dummy_stats.skipped_existing:,}")
         if dummy_stats.errors:
-            self.error(f"Dummy — errors: {dummy_stats.errors:,}")
+            self.error(f"Anonymise — errors: {dummy_stats.errors:,}")
 
         if stats.errors or dummy_stats.errors:
             raise CommandError("Referenced media sync finished with errors.")
