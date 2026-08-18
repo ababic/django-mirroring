@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-18
+
+### Added
+
+- README **Quickstart (Heroku)** — provision mirror DB, Dumpling policy, readonly
+  URL convention, media sync / anonymise settings, and staging restore.
+
 ## [0.2.3] - 2026-08-17
 
 ### Removed

@@ -18,13 +18,9 @@ compatible-release pinned; see [Pinned dependencies](#pinned-dependencies).
 
 ## Installation
 
-Pick the command for your preferred package installer:
-
 ```bash
-uv add django-mirroring
-pip install django-mirroring
-# or from GitHub while unpublished:
-pip install git+https://github.com/ababic/django-mirroring.git
+uv add "django-mirroring~=0.2.3"
+# or: pip install "django-mirroring~=0.2.3"
 ```
 
 Add `"mirroring"` to `INSTALLED_APPS` and run migrations:
@@ -32,6 +28,277 @@ Add `"mirroring"` to `INSTALLED_APPS` and run migrations:
 ```bash
 python manage.py migrate mirroring
 ```
+
+## Quickstart (Heroku)
+
+End-to-end setup for a Django app that already runs on Heroku Postgres + S3.
+Substitute your app names and plan sizes. The package does not invent hostnames
+or “safe” targets — **you** choose which URLs and buckets are written.
+
+Architecture once configured:
+
+```text
+production follower ──pg_dump──► Dumpling ──► mirror DB (prod addon)
+                                              │
+                         restore_from_mirror ──┘──► staging primary
+                         sync_referenced_media ──► staging media bucket
+```
+
+### 1. Install and wire settings
+
+```bash
+uv add "django-mirroring~=0.2.3"
+python manage.py migrate mirroring
+```
+
+In the host project (typical pattern):
+
+```python
+# settings.py
+import mirroring.defaults as mirror_defaults
+from myproject import mirror_policy  # project-owned lists + Dumpling path
+
+INSTALLED_APPS = [
+    # ...
+    "mirroring",
+]
+
+MIRRORING_ADMIN_SITE = "myproject.admin.site"  # optional custom AdminSite
+MIRROR_DUMPLING_CONFIG = mirror_defaults.mirror_dumpling_config_path(
+    default=mirror_policy.DEFAULT_DUMPLING_CONFIG,
+)
+MIRROR_EXCLUDED_SCHEMA = mirror_policy.MIRROR_EXCLUDED_SCHEMA  # e.g. heroku_ext
+MIRROR_EXCLUDED_TABLE_DATA = mirror_defaults.build_mirror_excluded_table_data(
+    mirror_policy.MIRROR_EXTRA_EXCLUDED_TABLE_DATA,
+)
+MIRROR_RETAIN_MONTHS = mirror_defaults.mirror_retain_months()
+MIRROR_ROW_RETAIN = mirror_policy.MIRROR_ROW_RETAIN
+MIRROR_RESTORE_STAFF_EMAIL_DOMAINS = mirror_policy.mirror_restore_staff_email_domains()
+```
+
+### 2. Mirror database (production)
+
+#### Provision the mirror database
+
+Create a **separate** Postgres addon on the production app (not a fork of live
+data for day-to-day use — refresh will replace its contents nightly). The role
+behind `MIRROR_DATABASE_URL` needs **`CREATEDB`** (shadow load + rename cutover).
+
+```bash
+# Example: empty Standard-0 on the production app (adjust plan as needed)
+heroku addons:create heroku-postgresql:standard-0 \
+  -a your-app-production \
+  --as MIRROR_DATABASE
+
+heroku pg:wait -a your-app-production
+heroku config:get MIRROR_DATABASE_URL -a your-app-production
+```
+
+Heroku will set `MIRROR_DATABASE_URL` when you use `--as MIRROR_DATABASE`. If you
+attach under another colour name, copy that URL into `MIRROR_DATABASE_URL`
+yourself.
+
+#### Point the dump source at a full-access follower
+
+Prefer a **follower/replica** of the primary so `pg_dump` does not compete with
+writes, and so the role can `SELECT` every table Dumpling anonymises.
+
+```bash
+# Example: follower of DATABASE_URL on the same app
+heroku addons:create heroku-postgresql:standard-0 \
+  -a your-app-production \
+  --as MIRROR_SOURCE_DATABASE \
+  -- --follow DATABASE_URL
+
+heroku pg:wait -a your-app-production
+# Ensure MIRROR_SOURCE_DATABASE_URL is set (Heroku sets it with --as above)
+heroku config:get MIRROR_SOURCE_DATABASE_URL -a your-app-production
+```
+
+Do **not** use a restricted / allow-listed read role (missing `SELECT` on PII
+tables) as the dump source — the dump will be incomplete or fail.
+
+#### Exclude noisy / non-portable table data
+
+Omit provider schemas and empty high-churn or secret tables (schema still
+created). Common Heroku + Django starting point:
+
+```python
+# myproject/mirror_policy.py
+MIRROR_EXCLUDED_SCHEMA = ["heroku_ext", "_heroku"]
+
+MIRROR_EXTRA_EXCLUDED_TABLE_DATA = [
+    "django_session",
+    "django_admin_log",
+    # tokens, rate-limit buckets, task trackers, bulk exports, …
+]
+```
+
+Wire with `build_mirror_excluded_table_data(...)` as shown above. Optionally set
+`MIRROR_ROW_RETAIN` + `MIRROR_RETAIN_MONTHS` so refresh keeps only recent rows
+for large timestamped tables (orders, etc.).
+
+#### Add a Dumpling policy and `MIRROR_DUMPLING_CONFIG`
+
+Anonymisation rules are **project-owned** TOML (not shipped in this package).
+
+```bash
+# Draft from a fresh plain-SQL dump when the schema is ready (dumpling-cli >= 0.9):
+pg_dump "$MIRROR_SOURCE_DATABASE_URL" -Fp --no-owner --no-acl -f /tmp/src.sql
+dumpling scaffold-config -i /tmp/src.sql --infer-json-paths -o myproject/dumplingconf.toml
+```
+
+Edit rules for emails, names, addresses, JSON paths, etc. Keep salts out of git:
+
+```bash
+heroku config:set DUMPLING_GLOBAL_SALT="$(openssl rand -hex 32)" -a your-app-production
+```
+
+Point Django at the file (path on the slug, or resolve via
+`mirror_dumpling_config_path(default=...)`). Set staff domains used both for
+username keep on the mirror and rematerialisation on restore:
+
+```bash
+heroku config:set MIRROR_RESTORE_STAFF_EMAIL_DOMAINS="example.com" -a your-app-production
+```
+
+Include a `# MIRROR_STAFF_USERNAME_KEEP_RULE` marker in the TOML where the
+refresh command should inject the staff username keep rule (see host examples).
+
+#### First refresh (dry-run, then live)
+
+```bash
+heroku run python manage.py refresh_database_mirror --dry-run -a your-app-production
+# When ready (scheduler or one-off):
+heroku run python manage.py refresh_database_mirror --confirm -a your-app-production
+```
+
+Schedule `refresh_database_mirror` nightly on production once dry-runs look good.
+
+#### Read-only URL for staging (store on production for safekeeping)
+
+Staging should **restore from** the mirror using a credential that cannot
+`DROP`/`CREATE` databases or write production data. Create a read-only role on
+the **mirror** instance, put the URL in production config as
+`MIRROR_DATABASE_READONLY_URL` (documentation / copy source only — this package
+does not read that name), then set staging’s `MIRROR_DATABASE_URL` to that
+read-only URL.
+
+```bash
+# On the mirror Postgres (example — adjust role/db names):
+# CREATE ROLE mirror_readonly LOGIN PASSWORD '...';
+# GRANT CONNECT ON DATABASE <mirror_db> TO mirror_readonly;
+# GRANT USAGE ON SCHEMA public TO mirror_readonly;
+# GRANT SELECT ON ALL TABLES IN SCHEMA public TO mirror_readonly;
+# ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO mirror_readonly;
+
+heroku config:set MIRROR_DATABASE_READONLY_URL='postgres://mirror_readonly:...@.../<mirror_db>?sslmode=require' \
+  -a your-app-production
+```
+
+### 3. Mirror media (production safekeeping + policy)
+
+When staging uses a **different** S3 bucket than production, restore only brings
+DB rows; object bytes are copied afterward with `sync_referenced_media`.
+
+#### Read-only AWS credentials (store on production)
+
+Create an IAM user/role that can `s3:GetObject` / `s3:ListBucket` on the
+production media bucket only. Store the keys on the **production** app for
+safekeeping (operators copy them to staging when configuring sync):
+
+```bash
+heroku config:set \
+  MEDIA_SYNC_SOURCE_AWS_ACCESS_KEY_ID=... \
+  MEDIA_SYNC_SOURCE_AWS_SECRET_ACCESS_KEY=... \
+  -a your-app-production
+```
+
+(Your host may map those into the process env that `boto3` uses for the source
+client, or you may pass a dedicated profile — the package reads
+`MEDIA_SYNC_SOURCE_BUCKET` / region and the usual AWS credential chain.)
+
+#### Skip or anonymise selected media
+
+In host settings:
+
+```python
+# Skip CopyObject for PII-bearing models/fields; plant placeholders instead.
+MIRRORING_ANONYMISE_MEDIA_FIELDS = [
+    "listing.shipment",           # shipping labels
+    "data_reporting.exporteddata",
+    # or field-level: "myapp.model.field",
+]
+# Optional: "myapp.media_sync.anonymise_for_ref"
+# MIRRORING_ANONYMISE_MEDIA_PROVIDER = "..."
+
+# Extra keys not stored in FileField/ImageField (JSON path bags, CharFields, …).
+# Omit a collector entirely to skip that bag.
+MEDIA_SYNC_EXTRA_COLLECTORS = [
+    "myapp.media_sync.collect_extra_keys",
+]
+```
+
+Anything not referenced from the restored DB (and collectors) is never copied —
+that is how “skip certain media completely” works at scale.
+
+### 4. Mirror restore (staging)
+
+#### Env vars on the staging app
+
+| Var | Points at |
+|-----|-----------|
+| `MIRROR_DATABASE_URL` | Read-only URL of the **production mirror** (copy of `MIRROR_DATABASE_READONLY_URL`) |
+| `MIRROR_RESTORE_TARGET_DATABASE_URL` | Staging primary to replace (usually staging `DATABASE_URL`) |
+| `MIRROR_RESTORE_ALLOW` | Set to `1` only for live restore/revert one-offs or authorized jobs |
+| `MIRROR_RESTORE_STAFF_EMAIL_DOMAINS` | Same domains as production (username rematerialise) |
+| `DUMPLING_GLOBAL_SALT` | Not required for restore (already scrubbed on the mirror) |
+| `MEDIA_SYNC_SOURCE_BUCKET` | Production media bucket name |
+| `MEDIA_SYNC_ALLOW` | `1` for live media sync |
+| `AWS_STORAGE_BUCKET_NAME` | **Staging** media bucket (destination) |
+| AWS credentials | Staging write + read-only prod (or source) credentials as your IAM design requires |
+
+```bash
+heroku config:set \
+  MIRROR_DATABASE_URL="$(heroku config:get MIRROR_DATABASE_READONLY_URL -a your-app-production)" \
+  MIRROR_RESTORE_TARGET_DATABASE_URL="$(heroku config:get DATABASE_URL -a your-app-staging)" \
+  MIRROR_RESTORE_STAFF_EMAIL_DOMAINS="example.com" \
+  MEDIA_SYNC_SOURCE_BUCKET=your-prod-media-bucket \
+  -a your-app-staging
+```
+
+Ensure staging dynos have `pg_dump` / `psql` at least major
+`MIRRORING_POSTGRES_CLIENT_MAJOR` (default `15`).
+
+#### Run restore, then media sync
+
+```bash
+heroku run python manage.py restore_from_mirror --dry-run -a your-app-staging
+
+MIRROR_RESTORE_ALLOW=1 heroku run \
+  python manage.py restore_from_mirror --confirm -a your-app-staging
+
+# Optional rollback while {db}_preswap still exists:
+# MIRROR_RESTORE_ALLOW=1 heroku run python manage.py revert_mirror_restore --confirm -a your-app-staging
+
+heroku run python manage.py sync_referenced_media --dry-run -a your-app-staging
+MEDIA_SYNC_ALLOW=1 heroku run \
+  python manage.py sync_referenced_media --confirm -a your-app-staging
+```
+
+`restore_from_mirror` rematerialises staff `email` / `password` / names from the
+**pre-restore staging** DB onto users matched by `UserModel.USERNAME_FIELD`
+(usernames were kept on the mirror for allowlisted email domains).
+
+### 5. Checklist
+
+- [ ] `mirroring` installed, migrated, admin watermark visible
+- [ ] Production: `MIRROR_SOURCE_DATABASE_URL` (follower), `MIRROR_DATABASE_URL` (CREATEDB)
+- [ ] Production: Dumpling TOML + `DUMPLING_GLOBAL_SALT` + exclude/retain lists
+- [ ] Production: nightly `refresh_database_mirror`
+- [ ] Production: `MIRROR_DATABASE_READONLY_URL` (+ optional media source IAM) stored
+- [ ] Staging: restore target + readonly mirror URL + staff domains
+- [ ] Staging: `restore_from_mirror` then `sync_referenced_media` with anonymise list
 
 ## Pinned dependencies
 
@@ -78,6 +345,7 @@ wire env → settings in one place).
 |---------------|---------|
 | `MIRROR_SOURCE_DATABASE_URL` | `pg_dump` source (prefer a full-access follower/replica) |
 | `MIRROR_DATABASE_URL` | Published mirror database (destination for refresh; source for restore) |
+| `MIRROR_DATABASE_READONLY_URL` | *(convention)* read-only mirror URL stored on production for staging to copy — not read by this package |
 | `MIRROR_DUMPLING_CONFIG` | Path to project Dumpling TOML (required for refresh) |
 | `MIRROR_EXCLUDED_SCHEMA` | Schemas omitted from dump (default: none — set in host settings) |
 | `MIRROR_EXCLUDED_TABLES` | Tables omitted entirely |
