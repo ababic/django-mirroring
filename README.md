@@ -6,6 +6,7 @@ Postgres shadow-database cutover so consumers never see a half-loaded mirror.
 
 ## Links
 
+- [Quickstart (Heroku)](#quickstart-heroku)
 - [Changelog](CHANGELOG.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
@@ -19,8 +20,8 @@ compatible-release pinned; see [Pinned dependencies](#pinned-dependencies).
 ## Installation
 
 ```bash
-uv add "django-mirroring~=0.2.3"
-# or: pip install "django-mirroring~=0.2.3"
+uv add "django-mirroring~=0.2.4"
+# or: pip install "django-mirroring~=0.2.4"
 ```
 
 Add `"mirroring"` to `INSTALLED_APPS` and run migrations:
@@ -47,7 +48,7 @@ production follower ──pg_dump──► Dumpling ──► mirror DB (prod ad
 ### 1. Install and wire settings
 
 ```bash
-uv add "django-mirroring~=0.2.3"
+uv add "django-mirroring~=0.2.4"
 python manage.py migrate mirroring
 ```
 
@@ -225,7 +226,7 @@ In host settings:
 ```python
 # Skip CopyObject for PII-bearing models/fields; plant placeholders instead.
 MIRRORING_ANONYMISE_MEDIA_FIELDS = [
-    "listing.shipment",           # shipping labels
+    "listing.shipment",  # shipping labels
     "data_reporting.exporteddata",
     # or field-level: "myapp.model.field",
 ]
